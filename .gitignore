@@ -1,0 +1,25 @@
+# Node / Firebase
+node_modules/
+functions/node_modules/
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+public/src/firebase-config.js
+functions/.env*
+
+# Service account keys
+service-account*.json
+*-firebase-adminsdk-*.json
+dueba-*.json
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

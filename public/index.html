@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dueba Lobby</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section id="auth-view" class="auth-screen">
+        <div class="auth-card">
+          <p class="eyebrow">DUEBA</p>
+          <h1>로그인</h1>
+          <p class="auth-copy">
+            자체 계정으로 로그인하고 상점, 인벤토리, 룰렛, 대국 정보, 스탯 메뉴로
+            이동합니다.
+          </p>
+
+          <form id="login-form" class="stack-form">
+            <label>
+              <span>아이디</span>
+              <input type="text" name="loginId" placeholder="login_id" required />
+            </label>
+            <label>
+              <span>비밀번호</span>
+              <input type="password" name="password" placeholder="비밀번호" required />
+            </label>
+            <button type="submit" class="primary-button">로그인</button>
+          </form>
+
+          <button id="open-signup-modal" type="button" class="ghost-button wide">
+            회원가입
+          </button>
+        </div>
+      </section>
+
+      <section id="dashboard-view" class="dashboard hidden">
+        <header class="dashboard-header">
+          <div>
+            <p class="eyebrow">PLAYER LOBBY</p>
+            <h2 id="welcome-title">환영합니다</h2>
+            <p id="profile-summary" class="muted"></p>
+          </div>
+          <div class="header-actions">
+            <span id="role-badge" class="role-badge">user</span>
+            <button id="refresh-dashboard" type="button" class="ghost-button">새로고침</button>
+            <button id="logout-button" type="button" class="ghost-button">로그아웃</button>
+          </div>
+        </header>
+
+        <section class="stats-strip">
+          <article class="mini-card">
+            <span>보유 재화</span>
+            <strong id="currency-value">0 G</strong>
+          </article>
+          <article class="mini-card">
+            <span>인벤토리 수</span>
+            <strong id="inventory-count">0</strong>
+          </article>
+          <article class="mini-card">
+            <span>남은 스탯 포인트</span>
+            <strong id="stat-points">0</strong>
+          </article>
+        </section>
+
+        <nav id="menu-tabs" class="menu-tabs"></nav>
+        <section id="menu-content" class="menu-content"></section>
+      </section>
+    </div>
+
+    <div id="signup-modal" class="modal-backdrop hidden">
+      <div class="modal-panel">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">SIGN UP</p>
+            <h2>회원가입</h2>
+          </div>
+          <button id="close-signup-modal" type="button" class="icon-button">x</button>
+        </div>
+
+        <form id="signup-form" class="stack-form">
+          <label>
+            <span>아이디</span>
+            <input
+              type="text"
+              name="loginId"
+              minlength="4"
+              maxlength="20"
+              placeholder="login_id"
+              required
+            />
+          </label>
+          <label>
+            <span>작혼 닉네임</span>
+            <input
+              type="text"
+              name="nickname"
+              maxlength="24"
+              placeholder="작혼 닉네임"
+              required
+            />
+          </label>
+          <label>
+            <span>캐릭터 이름</span>
+            <input
+              type="text"
+              name="characterName"
+              maxlength="24"
+              placeholder="캐릭터 이름"
+              required
+            />
+          </label>
+          <label>
+            <span>비밀번호</span>
+            <input
+              type="password"
+              name="password"
+              minlength="8"
+              placeholder="8자 이상"
+              required
+            />
+          </label>
+          <label>
+            <span>비밀번호 확인</span>
+            <input
+              type="password"
+              name="passwordConfirm"
+              minlength="8"
+              placeholder="비밀번호 재입력"
+              required
+            />
+          </label>
+          <button type="submit" class="primary-button">회원가입 완료</button>
+        </form>
+      </div>
+    </div>
+
+    <aside id="toast" class="toast hidden"></aside>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
