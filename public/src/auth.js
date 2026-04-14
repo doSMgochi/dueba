@@ -18,9 +18,16 @@ import {
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-functions.js";
 import { auth, db, functions } from "./firebase.js";
 
-const ensureUserProfile = httpsCallable(functions, "ensureUserProfile");
-const getDashboardData = httpsCallable(functions, "getDashboardData");
+const ensureUserProfileCallable = httpsCallable(functions, "ensureUserProfile");
+const getDashboardDataCallable = httpsCallable(functions, "getDashboardData");
 const selectTraitCallable = httpsCallable(functions, "selectTrait");
+const adminManageUserCallable = httpsCallable(functions, "adminManageUser");
+const adminDeleteUserCallable = httpsCallable(functions, "adminDeleteUser");
+const createAnnouncementCallable = httpsCallable(functions, "createAnnouncement");
+const dismissAnnouncementCallable = httpsCallable(functions, "dismissAnnouncement");
+const sendParcelCallable = httpsCallable(functions, "sendParcel");
+const respondParcelCallable = httpsCallable(functions, "respondParcel");
+const markNotificationReadCallable = httpsCallable(functions, "markNotificationRead");
 
 function normalizeLoginId(loginId) {
   return String(loginId || "").trim().toLowerCase();
@@ -43,6 +50,7 @@ function buildDefaultProfile({ uid, loginId, nickname, characterName }) {
     role: "user",
     selectedTraitIds: [],
     availableTraitPoints: 12,
+    dismissedAnnouncementIds: [],
     inventory: [],
     currency: 300,
     updatedAt: serverTimestamp(),
@@ -67,13 +75,15 @@ function toFriendlyError(error) {
     "auth/invalid-email": "아이디 형식이 올바르지 않습니다.",
     "auth/invalid-credential": "아이디 또는 비밀번호가 올바르지 않습니다.",
     "auth/missing-password": "비밀번호를 입력해 주세요.",
-    "functions/not-found": "유저 프로필을 찾지 못했습니다.",
+    "functions/not-found": "대상을 찾지 못했습니다.",
     "functions/invalid-argument": "입력값을 다시 확인해 주세요.",
-    "functions/already-exists": "이미 가입된 정보입니다.",
+    "functions/already-exists": "이미 존재하는 데이터입니다.",
+    "functions/failed-precondition": "현재 상태에서는 처리할 수 없습니다.",
+    "functions/permission-denied": "권한이 없습니다.",
     "permission-denied": "Firestore 권한 설정을 확인해 주세요.",
   };
 
-  return new Error(errorMap[code] || error.message || "요청 처리 중 오류가 발생했습니다.");
+  return new Error(errorMap[code] || error.message || "요청을 처리하는 중 오류가 발생했습니다.");
 }
 
 async function findUserProfileByUid(uid) {
@@ -158,7 +168,7 @@ export async function signUpWithProfile({ loginId, nickname, characterName, pass
     );
 
     try {
-      await ensureUserProfile(payload);
+      await ensureUserProfileCallable(payload);
     } catch (_error) {
       await createProfileFallback(userCredential.user.uid, payload);
     }
@@ -188,7 +198,7 @@ export async function logoutUser() {
 
 export async function refreshCurrentUserProfile() {
   try {
-    const result = await getDashboardData();
+    const result = await getDashboardDataCallable();
     return result.data.profile;
   } catch (error) {
     if (auth.currentUser) {
@@ -227,6 +237,69 @@ export async function selectTrait(traitId) {
   try {
     const result = await selectTraitCallable({ traitId });
     return result.data.profile;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function adminManageUser(payload) {
+  try {
+    const result = await adminManageUserCallable(payload);
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function adminDeleteUser(characterName) {
+  try {
+    const result = await adminDeleteUserCallable({ characterName });
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function createAnnouncement(payload) {
+  try {
+    const result = await createAnnouncementCallable(payload);
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function dismissAnnouncement(announcementId) {
+  try {
+    const result = await dismissAnnouncementCallable({ announcementId });
+    return result.data.profile;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function sendParcel(payload) {
+  try {
+    const result = await sendParcelCallable(payload);
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function respondParcel(parcelId, action) {
+  try {
+    const result = await respondParcelCallable({ parcelId, action });
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function markNotificationRead(notificationId) {
+  try {
+    const result = await markNotificationReadCallable({ notificationId });
+    return result.data;
   } catch (error) {
     throw toFriendlyError(error);
   }

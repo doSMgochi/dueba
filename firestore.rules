@@ -5,19 +5,8 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return signedIn() &&
-        request.auth.token.role in ["admin", "gm", "moderator"];
-    }
-
     match /users/{characterName} {
-      allow read: if signedIn() &&
-        (
-          characterName == request.auth.uid ||
-          resource.data.uid == request.auth.uid ||
-          isAdmin()
-        );
-
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
       allow create: if signedIn() &&
         request.resource.data.uid == request.auth.uid &&
         characterName == request.resource.data.characterName &&
@@ -25,9 +14,7 @@ service cloud.firestore {
         request.resource.data.nickname is string &&
         request.resource.data.characterName is string &&
         request.resource.data.role == "user";
-
-      allow update: if false;
-      allow delete: if false;
+      allow update, delete: if false;
     }
 
     match /shop/{itemId} {
@@ -55,9 +42,28 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /announcements/{announcementId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if signedIn() && resource.data.targetUid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    match /parcels/{parcelId} {
+      allow read: if signedIn() &&
+        (
+          resource.data.senderUid == request.auth.uid ||
+          resource.data.receiverUid == request.auth.uid
+        );
+      allow create, update, delete: if false;
+    }
+
     match /live-matches/{matchId} {
       allow read: if signedIn();
-      allow create, update, delete: if signedIn();
+      allow create, update, delete: if false;
     }
   }
 }
