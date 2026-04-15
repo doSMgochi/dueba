@@ -5,6 +5,7 @@ import {
   signOut,
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
 import {
+  arrayUnion,
   collection,
   doc,
   getDoc,
@@ -13,21 +14,23 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  updateDoc,
   where,
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-functions.js";
 import { auth, db, functions } from "./firebase.js";
 
-const ensureUserProfileCallable = httpsCallable(functions, "ensureUserProfile");
-const getDashboardDataCallable = httpsCallable(functions, "getDashboardData");
 const selectTraitCallable = httpsCallable(functions, "selectTrait");
+const getRankingBoardCallable = httpsCallable(functions, "getRankingBoard");
 const adminManageUserCallable = httpsCallable(functions, "adminManageUser");
 const adminDeleteUserCallable = httpsCallable(functions, "adminDeleteUser");
+const createItemDefinitionCallable = httpsCallable(functions, "createItemDefinition");
 const createAnnouncementCallable = httpsCallable(functions, "createAnnouncement");
-const dismissAnnouncementCallable = httpsCallable(functions, "dismissAnnouncement");
+const purchaseShopItemCallable = httpsCallable(functions, "purchaseShopItem");
 const sendParcelCallable = httpsCallable(functions, "sendParcel");
 const respondParcelCallable = httpsCallable(functions, "respondParcel");
-const markNotificationReadCallable = httpsCallable(functions, "markNotificationRead");
+const listAdminLogsCallable = httpsCallable(functions, "listAdminLogs");
+const listBugReportsCallable = httpsCallable(functions, "listBugReports");
 
 function normalizeLoginId(loginId) {
   return String(loginId || "").trim().toLowerCase();
@@ -48,6 +51,7 @@ function buildDefaultProfile({ uid, loginId, nickname, characterName }) {
     nickname: String(nickname || "").trim(),
     characterName: normalizeCharacterName(characterName),
     role: "user",
+    rankingPoints: 0,
     selectedTraitIds: [],
     availableTraitPoints: 12,
     dismissedAnnouncementIds: [],
@@ -70,6 +74,13 @@ function buildBootstrapProfileFromUser(user) {
 
 function toFriendlyError(error) {
   const code = error?.code || "";
+  const detailedFunctionCodes = new Set([
+    "functions/invalid-argument",
+    "functions/not-found",
+    "functions/already-exists",
+    "functions/failed-precondition",
+    "functions/permission-denied",
+  ]);
   const errorMap = {
     "auth/email-already-in-use": "이미 사용 중인 아이디입니다.",
     "auth/invalid-email": "아이디 형식이 올바르지 않습니다.",
@@ -83,16 +94,24 @@ function toFriendlyError(error) {
     "permission-denied": "Firestore 권한 설정을 확인해 주세요.",
   };
 
+  if (detailedFunctionCodes.has(code) && error?.message) {
+    return new Error(error.message);
+  }
+
   return new Error(errorMap[code] || error.message || "요청을 처리하는 중 오류가 발생했습니다.");
 }
 
 async function findUserProfileByUid(uid) {
-  const legacySnapshot = await getDoc(doc(db, "users", uid));
-  if (legacySnapshot.exists()) {
-    return {
-      id: legacySnapshot.id,
-      data: legacySnapshot.data(),
-    };
+  try {
+    const legacySnapshot = await getDoc(doc(db, "users", uid));
+    if (legacySnapshot.exists()) {
+      return {
+        id: legacySnapshot.id,
+        data: legacySnapshot.data(),
+      };
+    }
+  } catch (_error) {
+    // Ignore permission failures for legacy doc ids and continue with uid query.
   }
 
   const profileQuery = query(collection(db, "users"), where("uid", "==", uid), limit(1));
@@ -166,12 +185,7 @@ export async function signUpWithProfile({ loginId, nickname, characterName, pass
       toInternalEmail(normalizedLoginId),
       password
     );
-
-    try {
-      await ensureUserProfileCallable(payload);
-    } catch (_error) {
-      await createProfileFallback(userCredential.user.uid, payload);
-    }
+    await createProfileFallback(userCredential.user.uid, payload);
 
     return userCredential.user;
   } catch (error) {
@@ -197,23 +211,19 @@ export async function logoutUser() {
 }
 
 export async function refreshCurrentUserProfile() {
-  try {
-    const result = await getDashboardDataCallable();
-    return result.data.profile;
-  } catch (error) {
-    if (auth.currentUser) {
-      const fallbackProfile = await findUserProfileByUid(auth.currentUser.uid);
-      if (fallbackProfile) {
-        return {
-          docId: fallbackProfile.id,
-          ...fallbackProfile.data,
-        };
-      }
-
-      return ensureBootstrapProfileForCurrentUser();
+  if (auth.currentUser) {
+    const fallbackProfile = await findUserProfileByUid(auth.currentUser.uid);
+    if (fallbackProfile) {
+      return {
+        docId: fallbackProfile.id,
+        ...fallbackProfile.data,
+      };
     }
-    throw toFriendlyError(error);
+
+    return ensureBootstrapProfileForCurrentUser();
   }
+
+  throw new Error("로그인된 유저가 없습니다.");
 }
 
 export function onSignedInUserChanged(callback) {
@@ -242,6 +252,46 @@ export async function selectTrait(traitId) {
   }
 }
 
+export async function getRankingBoard() {
+  try {
+    const [userSnapshot, traitSnapshot] = await Promise.all([
+      getDocs(collection(db, "users")),
+      getDocs(collection(db, "traits")),
+    ]);
+
+    const traitPointMap = new Map(
+      traitSnapshot.docs.map((item) => [item.id, Number(item.data().requiredPoints || 0)])
+    );
+
+    return userSnapshot.docs
+      .map((item) => {
+        const data = item.data();
+        const selectedTraitIds = Array.isArray(data.selectedTraitIds) ? data.selectedTraitIds : [];
+        const usedTraitPoints = selectedTraitIds.reduce(
+          (sum, traitId) => sum + Number(traitPointMap.get(traitId) || 0),
+          0
+        );
+
+        return {
+          uid: data.uid || "",
+          characterName: data.characterName || item.id,
+          nickname: data.nickname || "-",
+          rankingPoints: Number(data.rankingPoints || 0),
+          currency: Number(data.currency || 0),
+          totalTraitPoints: Number(data.availableTraitPoints || 0) + usedTraitPoints,
+        };
+      })
+      .sort((left, right) => right.rankingPoints - left.rankingPoints);
+  } catch (error) {
+    try {
+      const result = await getRankingBoardCallable();
+      return result.data.rankings || [];
+    } catch (fallbackError) {
+      throw toFriendlyError(fallbackError);
+    }
+  }
+}
+
 export async function adminManageUser(payload) {
   try {
     const result = await adminManageUserCallable(payload);
@@ -260,6 +310,15 @@ export async function adminDeleteUser(characterName) {
   }
 }
 
+export async function createItemDefinition(payload) {
+  try {
+    const result = await createItemDefinitionCallable(payload);
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
 export async function createAnnouncement(payload) {
   try {
     const result = await createAnnouncementCallable(payload);
@@ -269,10 +328,71 @@ export async function createAnnouncement(payload) {
   }
 }
 
+export async function listBugReports(payload) {
+  try {
+    const result = await listBugReportsCallable(payload);
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function purchaseShopItem(shopItemId) {
+  try {
+    const result = await purchaseShopItemCallable({ shopItemId });
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
 export async function dismissAnnouncement(announcementId) {
   try {
-    const result = await dismissAnnouncementCallable({ announcementId });
-    return result.data.profile;
+    if (!auth.currentUser) {
+      throw new Error("로그인된 유저가 없습니다.");
+    }
+
+    const profile = await findUserProfileByUid(auth.currentUser.uid);
+    if (!profile) {
+      throw new Error("유저 프로필을 찾지 못했습니다.");
+    }
+
+    await updateDoc(doc(db, "users", profile.id), {
+      dismissedAnnouncementIds: arrayUnion(announcementId),
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      docId: profile.id,
+      ...profile.data,
+      dismissedAnnouncementIds: [...new Set([...(profile.data.dismissedAnnouncementIds || []), announcementId])],
+    };
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function updateProfileSealImage(profileSealImage) {
+  try {
+    if (!auth.currentUser) {
+      throw new Error("로그인한 유저가 없습니다.");
+    }
+
+    const profile = await findUserProfileByUid(auth.currentUser.uid);
+    if (!profile) {
+      throw new Error("유저 프로필을 찾지 못했습니다.");
+    }
+
+    await updateDoc(doc(db, "users", profile.id), {
+      profileSealImage: String(profileSealImage || ""),
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      docId: profile.id,
+      ...profile.data,
+      profileSealImage: String(profileSealImage || ""),
+    };
   } catch (error) {
     throw toFriendlyError(error);
   }
@@ -298,7 +418,19 @@ export async function respondParcel(parcelId, action) {
 
 export async function markNotificationRead(notificationId) {
   try {
-    const result = await markNotificationReadCallable({ notificationId });
+    await updateDoc(doc(db, "notifications", notificationId), {
+      isRead: true,
+      readAt: serverTimestamp(),
+    });
+    return { ok: true };
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function listAdminLogs({ kind, page = 0, pageSize = 5 }) {
+  try {
+    const result = await listAdminLogsCallable({ kind, page, pageSize });
     return result.data;
   } catch (error) {
     throw toFriendlyError(error);

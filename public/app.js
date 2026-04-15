@@ -12,7 +12,6 @@ const dashboardView = document.querySelector("#dashboard-view");
 const signupForm = document.querySelector("#signup-form");
 const loginForm = document.querySelector("#login-form");
 const logoutButton = document.querySelector("#logout-button");
-const refreshButton = document.querySelector("#refresh-dashboard");
 const menuTabs = document.querySelector("#menu-tabs");
 const menuContent = document.querySelector("#menu-content");
 const toast = document.querySelector("#toast");
@@ -46,6 +45,7 @@ signupForm.addEventListener("submit", async (event) => {
   }
 
   try {
+    showToast("처리중입니다");
     await signUpWithProfile({
       loginId: payload.loginId,
       nickname: payload.nickname,
@@ -65,6 +65,7 @@ loginForm.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(new FormData(loginForm).entries());
 
   try {
+    showToast("처리중입니다");
     await loginWithId(payload.loginId, payload.password);
     loginForm.reset();
     showToast("로그인되었습니다.");
@@ -76,20 +77,6 @@ loginForm.addEventListener("submit", async (event) => {
 logoutButton.addEventListener("click", async () => {
   await logoutUser();
   showToast("로그아웃되었습니다.");
-});
-
-refreshButton.addEventListener("click", async () => {
-  if (!dashboardState.profile) {
-    return;
-  }
-
-  try {
-    const profile = await refreshCurrentUserProfile();
-    updateDashboard(profile, dashboardState.activeMenuId);
-    showToast("대시보드를 새로고침했습니다.");
-  } catch (error) {
-    showToast(error.message, true);
-  }
 });
 
 menuTabs.addEventListener("click", (event) => {

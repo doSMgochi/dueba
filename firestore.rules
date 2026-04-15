@@ -14,10 +14,29 @@ service cloud.firestore {
         request.resource.data.nickname is string &&
         request.resource.data.characterName is string &&
         request.resource.data.role == "user";
-      allow update, delete: if false;
+      allow update: if signedIn() &&
+        resource.data.uid == request.auth.uid &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.loginId == resource.data.loginId &&
+        request.resource.data.nickname == resource.data.nickname &&
+        request.resource.data.characterName == resource.data.characterName &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.rankingPoints == resource.data.rankingPoints &&
+        request.resource.data.selectedTraitIds == resource.data.selectedTraitIds &&
+        request.resource.data.availableTraitPoints == resource.data.availableTraitPoints &&
+        request.resource.data.inventory == resource.data.inventory &&
+        request.resource.data.currency == resource.data.currency &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(["dismissedAnnouncementIds", "updatedAt", "profileSealImage"]);
+      allow delete: if false;
     }
 
     match /shop/{itemId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /item-db/{itemId} {
       allow read: if signedIn();
       allow write: if false;
     }
@@ -28,7 +47,10 @@ service cloud.firestore {
     }
 
     match /roulette-items/{itemId} {
-      allow read, create, delete: if signedIn();
+      allow read, delete: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.name is string;
       allow update: if false;
     }
 
@@ -47,9 +69,50 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /notice-logs/{noticeId} {
+      allow read, write: if false;
+    }
+
+    match /operate-logs/{logId} {
+      allow read, write: if false;
+    }
+
+    match /match-results/{resultId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /todos/{todoId} {
+      allow read: if signedIn();
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.characterName is string &&
+        request.resource.data.text is string;
+      allow update: if false;
+    }
+
+    match /report-logs/{reportId} {
+      allow create: if signedIn() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.characterName is string &&
+        request.resource.data.title is string &&
+        request.resource.data.body is string;
+      allow read, update, delete: if false;
+    }
+
     match /notifications/{notificationId} {
       allow read: if signedIn() && resource.data.targetUid == request.auth.uid;
-      allow create, update, delete: if false;
+      allow update: if signedIn() &&
+        resource.data.targetUid == request.auth.uid &&
+        request.resource.data.targetUid == resource.data.targetUid &&
+        request.resource.data.targetCharacterName == resource.data.targetCharacterName &&
+        request.resource.data.type == resource.data.type &&
+        request.resource.data.message == resource.data.message &&
+        request.resource.data.payload == resource.data.payload &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.isRead == true;
+      allow create, delete: if false;
     }
 
     match /parcels/{parcelId} {
