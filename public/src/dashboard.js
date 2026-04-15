@@ -1,4 +1,4 @@
-import {
+﻿import {
   addDoc,
   collection,
   deleteDoc,
@@ -31,17 +31,17 @@ import {
 } from "./auth.js";
 
 export const menuDefinitions = [
-  { id: "ranking", label: "??��" },
-  { id: "match", label: "?��??�보" },
-  { id: "match-results", label: "?��?결과" },
-  { id: "traits", label: "?�성�? },
-  { id: "inventory", label: "?�벤?�리" },
-  { id: "shop", label: "?�점" },
+  { id: "ranking", label: "랭킹" },
+  { id: "match", label: "대국 정보" },
+  { id: "match-results", label: "대국 결과" },
+  { id: "traits", label: "특성치" },
+  { id: "inventory", label: "인벤토리" },
+  { id: "shop", label: "상점" },
   { id: "roulette", label: "룰렛" },
-  { id: "admin", label: "?�영�?메뉴", adminOnly: true },
-  { id: "bug-report", label: "버그 리포?? },
-  { id: "todo", label: "???? },
-  { id: "item-db", label: "?�이??DB", adminOnly: true },
+  { id: "admin", label: "운영진 메뉴", adminOnly: true },
+  { id: "bug-report", label: "버그 리포트" },
+  { id: "todo", label: "할 일" },
+  { id: "item-db", label: "아이템 DB", adminOnly: true },
 ];
 
 const adminRoles = ["admin", "gm", "moderator"];
@@ -49,17 +49,17 @@ const roulettePalette = ["#0d285a", "#153b7d", "#fa5f03", "#244f95", "#0d285a", 
 
 const sampleLiveMatches = [
   {
-    title: "?�재 진행중인 ?��??�시",
-    source: "?�롤�??�동 ?�정",
+    title: "현재 진행중인 대국 예시",
+    source: "크롤링 연동 예정",
     players: [
-      { mahjongNickname: "쪼름", characterName: "?�즈", traits: ["?�후�??�료", "36???�기로 ?�료"] },
-      { mahjongNickname: "?�스모찌", characterName: "?�오??, traits: ["�?��무쌍?�로 ?�료", "?�성 비공�?] },
+      { mahjongNickname: "쪼름", characterName: "유즈", traits: ["핑후로 화료", "36통 대기로 화료"] },
+      { mahjongNickname: "도스모찌", characterName: "아오이", traits: ["국사무쌍으로 화료", "특성 비공개"] },
     ],
   },
   {
-    title: "관???�기방 ?�시",
-    source: "?�롤�??�동 ?�정",
-    players: [{ mahjongNickname: "sample-player", characterName: "A-37", traits: ["?�후�??�료"] }],
+    title: "관전 대기방 예시",
+    source: "크롤링 연동 예정",
+    players: [{ mahjongNickname: "sample-player", characterName: "A-37", traits: ["핑후로 화료"] }],
   },
 ];
 
@@ -78,7 +78,7 @@ let rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
 let traitItemsCache = { data: null, fetchedAt: 0, promise: null };
 
 async function withPendingToast(onToast, task) {
-  onToast("처리중입?�다");
+  onToast("처리중입니다");
   return task();
 }
 
@@ -154,7 +154,7 @@ export function buildDashboard({
     ? activeMenuId
     : visibleMenus[0].id;
 
-  document.querySelector("#welcome-title").textContent = `${profile.characterName}???�영?�니??;
+  document.querySelector("#welcome-title").textContent = `${profile.characterName}님 환영합니다`;
   document.querySelector("#profile-summary").textContent = `${profile.nickname} | ID ${profile.loginId}`;
   document.querySelector("#role-badge").textContent = profile.role;
   document.querySelector("#currency-value").textContent = `${Number(profile.currency || 0)} G`;
@@ -202,9 +202,9 @@ function renderMenuContent(menuId, profile) {
   const isThreePlayerResultMode = activeResultMode.includes("3p");
   const inventoryItems = (profile.inventory || [])
     .map((item) => {
-      const tooltip = escapeHtml(`${item.name || "?�름 ?�는 ?�이??} | ${item.description || "?�명???�직 ?�록?��? ?�았?�니??"}`);
+      const tooltip = escapeHtml(`${item.name || "이름 없는 아이템"} | ${item.description || "설명이 아직 등록되지 않았습니다."}`);
       const itemKey = escapeHtml(buildInventoryItemKey(item));
-      const icon = escapeHtml(item.icon || "?��");
+      const icon = escapeHtml(item.icon || "🎁");
       return `
         <li class="inventory-item inventory-tooltip draggable-item" data-tooltip="${tooltip}" draggable="true" data-inventory-item-key="${itemKey}">
           <div class="dot-slot">${icon}</div>
@@ -243,21 +243,21 @@ function renderMenuContent(menuId, profile) {
   const views = {
     ranking: `
       <article class="content-card full">
-        <h3>??��</h3>
+        <h3>랭킹</h3>
         <div class="table-wrap">
           <table class="log-table ranking-table">
             <thead>
               <tr>
-                <th>?�위</th>
-                <th>캐릭?�명</th>
-                <th>?�혼 ?�네??/th>
-                <th>??��???�인??/th>
-                <th>보유 ?�화</th>
-                <th>�??�성�??�인??/th>
+                <th>순위</th>
+                <th>캐릭터명</th>
+                <th>작혼 닉네임</th>
+                <th>랭킹전 포인트</th>
+                <th>보유 재화</th>
+                <th>총 특성치 포인트</th>
               </tr>
             </thead>
             <tbody id="ranking-table-body">
-              <tr><td colspan="6" class="table-empty">??��??불러?�는 중입?�다.</td></tr>
+              <tr><td colspan="6" class="table-empty">랭킹을 불러오는 중입니다.</td></tr>
             </tbody>
           </table>
         </div>
@@ -266,40 +266,40 @@ function renderMenuContent(menuId, profile) {
     shop: `
       <div id="shop-grid" class="content-grid three">
         <article class="content-card full">
-          <p class="muted">?�점 ?�보�?불러?�는 중입?�다.</p>
+          <p class="muted">상점 정보를 불러오는 중입니다.</p>
         </article>
       </div>
     `,
     "item-db": `
       <div id="item-db-grid" class="content-grid three">
         <article class="content-card full">
-          <p class="muted">?�이??DB�?불러?�는 중입?�다.</p>
+          <p class="muted">아이템 DB를 불러오는 중입니다.</p>
         </article>
       </div>
     `,
     "bug-report": `
       <div class="content-grid two">
         <article class="content-card">
-          <h3>버그 리포???�성</h3>
+          <h3>버그 리포트 작성</h3>
           <form id="bug-report-form" class="stack-form compact-form">
-            <label><span>?�목</span><input type="text" name="title" placeholder="간단???�목" required /></label>
-            <label><span>?�용</span><textarea name="body" rows="6" placeholder="?�현 방법?�나 증상???�어주세??" required></textarea></label>
-            <button type="submit" class="primary-button">리포???�록</button>
+            <label><span>제목</span><input type="text" name="title" placeholder="간단한 제목" required /></label>
+            <label><span>내용</span><textarea name="body" rows="6" placeholder="재현 방법이나 증상을 적어주세요." required></textarea></label>
+            <button type="submit" class="primary-button">리포트 등록</button>
           </form>
         </article>
         <article class="content-card ${adminRoles.includes(profile.role) ? "" : "hidden"}">
           <div class="admin-log-head">
-            <h3>?�수??리포??/h3>
+            <h3>접수된 리포트</h3>
             <div class="admin-log-pager">
-              <button type="button" class="ghost-button compact-button" data-report-page="prev">?�전</button>
-              <span id="bug-report-page-label" class="muted">1 ?�이지</span>
-              <button type="button" class="ghost-button compact-button" data-report-page="next">?�음</button>
+              <button type="button" class="ghost-button compact-button" data-report-page="prev">이전</button>
+              <span id="bug-report-page-label" class="muted">1 페이지</span>
+              <button type="button" class="ghost-button compact-button" data-report-page="next">다음</button>
             </div>
           </div>
           <div class="table-wrap">
             <table class="log-table">
-              <thead><tr><th>?�각</th><th>?�성??/th><th>?�목</th><th>?�용</th></tr></thead>
-              <tbody id="bug-report-body"><tr><td colspan="4" class="table-empty">버그 리포?��? 불러?�는 중입?�다.</td></tr></tbody>
+              <thead><tr><th>시각</th><th>작성자</th><th>제목</th><th>내용</th></tr></thead>
+              <tbody id="bug-report-body"><tr><td colspan="4" class="table-empty">버그 리포트를 불러오는 중입니다.</td></tr></tbody>
             </table>
           </div>
         </article>
@@ -308,33 +308,33 @@ function renderMenuContent(menuId, profile) {
     inventory: `
       <div class="content-grid two inventory-layout">
         <article class="content-card full">
-          <h3>?�벤?�리</h3>
+          <h3>인벤토리</h3>
           <ul class="inventory-list">
-            ${inventoryItems || '<li class="empty-state">보유 중인 ?�이?�이 ?�습?�다.</li>'}
+            ${inventoryItems || '<li class="empty-state">보유 중인 아이템이 없습니다.</li>'}
           </ul>
         </article>
         <article class="content-card">
-          <h3>?�포 보내�?/h3>
+          <h3>소포 보내기</h3>
           <form id="parcel-form" class="stack-form compact-form">
-            <label><span>?�??캐릭?�명</span><input type="text" name="targetCharacterName" placeholder="받는 캐릭?�명" required /></label>
+            <label><span>대상 캐릭터명</span><input type="text" name="targetCharacterName" placeholder="받는 캐릭터명" required /></label>
             <div class="parcel-drop-shell">
               <div id="parcel-drop-zone" class="parcel-drop-zone">
-                <strong>보낼 ?�이??/strong>
-                <p class="muted">?�벤?�리 ?�이?�을 ?�기�??�래그해???�러 �??�어주세??</p>
-                <div id="parcel-selected-item" class="parcel-selected-item muted">?�택???�이?�이 ?�습?�다.</div>
-                <button id="parcel-clear-button" type="button" class="ghost-button compact-button">?�택 ?�제</button>
+                <strong>보낼 아이템</strong>
+                <p class="muted">인벤토리 아이템을 여기로 드래그해서 여러 개 넣어주세요.</p>
+                <div id="parcel-selected-item" class="parcel-selected-item muted">선택한 아이템이 없습니다.</div>
+                <button id="parcel-clear-button" type="button" class="ghost-button compact-button">선택 해제</button>
               </div>
             </div>
-            <label><span>보낼 ?�화</span><input type="number" min="0" name="currencyAmount" placeholder="0" /></label>
+            <label><span>보낼 재화</span><input type="number" min="0" name="currencyAmount" placeholder="0" /></label>
             <label class="inline-check parcel-wrap-check">
               <input type="checkbox" name="useWrapping" />
               <span class="check-indicator" aria-hidden="true"></span>
               <span class="check-copy">
-                <strong>?�장지 ?�용</strong>
-                <small>?�장지�??�용?�면 ?�용물을 ?�길 ???�고 기본?�으�?거절?????�습?�다. ?? ?��?가 거절권을 가지�??�다�?거절?????�습?�다.</small>
+                <strong>포장지 사용</strong>
+                <small>포장지를 사용하면 내용물을 숨길 수 있고 기본적으로 거절할 수 없습니다. 단, 상대가 거절권을 가지고 있다면 거절할 수 있습니다.</small>
               </span>
             </label>
-            <button type="submit" class="primary-button">?�포 보내�?/button>
+            <button type="submit" class="primary-button">소포 보내기</button>
           </form>
         </article>
       </div>
@@ -342,19 +342,19 @@ function renderMenuContent(menuId, profile) {
     todo: `
       <div class="content-grid two todo-layout">
         <article class="content-card">
-          <h3>????추�?</h3>
+          <h3>할 일 추가</h3>
           <form id="todo-form" class="stack-form compact-form todo-form">
             <label>
               <span>메모</span>
-              <textarea name="todoText" rows="4" maxlength="200" placeholder="간단??메모�??�어?�세?? required></textarea>
+              <textarea name="todoText" rows="4" maxlength="200" placeholder="간단한 메모를 적어두세요" required></textarea>
             </label>
-            <button type="submit" class="primary-button">추�?</button>
+            <button type="submit" class="primary-button">추가</button>
           </form>
         </article>
         <article class="content-card">
-          <h3>????목록</h3>
+          <h3>할 일 목록</h3>
           <div id="todo-list" class="stack-list">
-            <p class="muted">????목록??불러?�는 중입?�다.</p>
+            <p class="muted">할 일 목록을 불러오는 중입니다.</p>
           </div>
           <div id="todo-pager" class="notification-pager hidden"></div>
         </article>
@@ -364,33 +364,33 @@ function renderMenuContent(menuId, profile) {
       <div class="roulette-layout">
         <article class="content-card roulette-side-card">
           <div class="roulette-side-head">
-            <h3>룰렛 ??��</h3>
+            <h3>룰렛 항목</h3>
             <form id="roulette-item-form" class="roulette-inline-form">
-              <input type="text" name="name" placeholder="??�� ?�름" required />
-              <button type="submit" class="ghost-button compact-button">추�?</button>
+              <input type="text" name="name" placeholder="항목 이름" required />
+              <button type="submit" class="ghost-button compact-button">추가</button>
             </form>
           </div>
-          <div id="roulette-item-list" class="roulette-item-list compact-list"><p class="muted">?�록????��???�습?�다.</p></div>
+          <div id="roulette-item-list" class="roulette-item-list compact-list"><p class="muted">등록된 항목이 없습니다.</p></div>
         </article>
         <article class="content-card roulette-card wide">
           <div class="roulette-stage">
             <div class="roulette-pointer"></div>
             <div id="roulette-wheel" class="roulette-wheel empty-wheel">
               <div id="roulette-wheel-labels" class="roulette-labels">
-                <span class="wheel-placeholder">??��??추�??�면 ?�판??만들?�집?�다.</span>
+                <span class="wheel-placeholder">항목을 추가하면 원판이 만들어집니다.</span>
               </div>
             </div>
           </div>
-          <button id="roulette-button" type="button" class="primary-button roulette-spin-button">룰렛 ?�리�?/button>
-          <p id="roulette-result" class="muted roulette-result-text">??��??추�??�면 ?�릴 ???�습?�다.</p>
+          <button id="roulette-button" type="button" class="primary-button roulette-spin-button">룰렛 돌리기</button>
+          <p id="roulette-result" class="muted roulette-result-text">항목을 추가하면 돌릴 수 있습니다.</p>
         </article>
       </div>
       <article class="content-card roulette-log-card">
         <h3>최근 룰렛 결과</h3>
         <div class="table-wrap roulette-log-wrap">
           <table class="log-table">
-            <thead><tr><th>?�각</th><th>캐릭?�명</th><th>결과</th></tr></thead>
-            <tbody id="roulette-log-body"><tr><td colspan="3" class="table-empty">?�직 로그가 ?�습?�다.</td></tr></tbody>
+            <thead><tr><th>시각</th><th>캐릭터명</th><th>결과</th></tr></thead>
+            <tbody id="roulette-log-body"><tr><td colspan="3" class="table-empty">아직 로그가 없습니다.</td></tr></tbody>
           </table>
         </div>
       </article>
@@ -399,11 +399,11 @@ function renderMenuContent(menuId, profile) {
       <div class="content-grid two">
         ${liveMatchCards}
         <article class="content-card">
-          <h3>?�장 메모</h3>
-          <p>?�중???�롤�??�이?�에???��?��????��??찾고, �??�의 ?�혼 ?�네?�을 캐릭?��? ?�결???�재 ?��?��???�성치�? hover ?�보�?보여주는 구조�??�두?????�면?�니??</p>
+          <h3>확장 메모</h3>
+          <p>나중에 크롤링 데이터에서 대국중인 항목을 찾고, 그 안의 작혼 닉네임을 캐릭터와 연결해 현재 대국중인 특성치를 hover 정보로 보여주는 구조를 염두에 둔 화면입니다.</p>
           <div class="schema-box">
-            <strong>추천 컬렉??구조</strong>
-            <p><code>live-matches</code>???�목, ?�태, ?�레?�어 목록, ?�혼 ?�네?? 캐릭?�명, ?�성�??�약???�?�하??방식???�장???�리?�니??</p>
+            <strong>추천 컬렉션 구조</strong>
+            <p><code>live-matches</code>에 제목, 상태, 플레이어 목록, 작혼 닉네임, 캐릭터명, 특성치 요약을 저장하는 방식이 확장에 유리합니다.</p>
           </div>
         </article>
       </div>
@@ -412,10 +412,10 @@ function renderMenuContent(menuId, profile) {
       <article class="content-card full">
         <div class="result-mode-tabs">
           <div class="admin-section-tabs">
-            <button type="button" class="tab-button ${activeResultMode === "ranked-4p-hanchan" ? "active" : ""}" data-result-mode="ranked-4p-hanchan">??��??4??반장??/button>
-            <button type="button" class="tab-button ${activeResultMode === "ranked-3p-hanchan" ? "active" : ""}" data-result-mode="ranked-3p-hanchan">??��??3??반장??/button>
-            <button type="button" class="tab-button ${activeResultMode === "normal-4p-hanchan" ? "active" : ""}" data-result-mode="normal-4p-hanchan">?�반??4??반장??/button>
-            <button type="button" class="tab-button ${activeResultMode === "normal-3p-hanchan" ? "active" : ""}" data-result-mode="normal-3p-hanchan">?�반??3??반장??/button>
+            <button type="button" class="tab-button ${activeResultMode === "ranked-4p-hanchan" ? "active" : ""}" data-result-mode="ranked-4p-hanchan">랭킹전 4인 반장전</button>
+            <button type="button" class="tab-button ${activeResultMode === "ranked-3p-hanchan" ? "active" : ""}" data-result-mode="ranked-3p-hanchan">랭킹전 3인 반장전</button>
+            <button type="button" class="tab-button ${activeResultMode === "normal-4p-hanchan" ? "active" : ""}" data-result-mode="normal-4p-hanchan">일반전 4인 반장전</button>
+            <button type="button" class="tab-button ${activeResultMode === "normal-3p-hanchan" ? "active" : ""}" data-result-mode="normal-3p-hanchan">일반전 3인 반장전</button>
           </div>
         </div>
         <div class="table-wrap">
@@ -423,30 +423,30 @@ function renderMenuContent(menuId, profile) {
             <thead>
               <tr>
                 <th rowspan="2">Timestamp</th>
-                <th colspan="2">1??/th>
-                <th colspan="2">2??/th>
-                <th colspan="2">3??/th>
-                ${isThreePlayerResultMode ? "" : '<th colspan="2">4??/th>'}
+                <th colspan="2">1위</th>
+                <th colspan="2">2위</th>
+                <th colspan="2">3위</th>
+                ${isThreePlayerResultMode ? "" : '<th colspan="2">4위</th>'}
               </tr>
               <tr>
-                <th>?�네??/th>
-                <th>?�수</th>
-                <th>?�네??/th>
-                <th>?�수</th>
-                <th>?�네??/th>
-                <th>?�수</th>
-                ${isThreePlayerResultMode ? "" : "<th>?�네??/th><th>?�수</th>"}
+                <th>닉네임</th>
+                <th>점수</th>
+                <th>닉네임</th>
+                <th>점수</th>
+                <th>닉네임</th>
+                <th>점수</th>
+                ${isThreePlayerResultMode ? "" : "<th>닉네임</th><th>점수</th>"}
               </tr>
             </thead>
             <tbody id="match-results-body">
-              <tr><td colspan="${isThreePlayerResultMode ? 7 : 9}" class="table-empty">?��?결과�?불러?�는 중입?�다.</td></tr>
+              <tr><td colspan="${isThreePlayerResultMode ? 7 : 9}" class="table-empty">대국 결과를 불러오는 중입니다.</td></tr>
             </tbody>
           </table>
         </div>
         <div class="admin-log-pager">
-          <button type="button" class="ghost-button compact-button" data-match-page="prev">?�전</button>
-          <span id="match-results-page-label" class="muted">1 ?�이지</span>
-          <button type="button" class="ghost-button compact-button" data-match-page="next">?�음</button>
+          <button type="button" class="ghost-button compact-button" data-match-page="prev">이전</button>
+          <span id="match-results-page-label" class="muted">1 페이지</span>
+          <button type="button" class="ghost-button compact-button" data-match-page="next">다음</button>
         </div>
       </article>
     `,
@@ -454,15 +454,15 @@ function renderMenuContent(menuId, profile) {
       <article class="content-card full">
         <div class="trait-header">
           <div>
-            <h3>?�성�?/h3>
-            <p>???�성치는 ??번만 찍을 ???�습?�다. ?�공 보너?? ?�패 ?�널?? ?�요 ?�인?��? ?�로 빠르�??�인?????�습?�다.</p>
+            <h3>특성치</h3>
+            <p>한 특성치는 한 번만 찍을 수 있습니다. 성공 보너스, 실패 패널티, 필요 포인트를 표로 빠르게 확인할 수 있습니다.</p>
           </div>
-          <strong class="trait-point-badge">?��? ?�인??${Number(profile.availableTraitPoints || 0)}</strong>
+          <strong class="trait-point-badge">남은 포인트 ${Number(profile.availableTraitPoints || 0)}</strong>
         </div>
         <div class="table-wrap">
           <table class="log-table trait-table">
-            <thead><tr><th>?�성�?/th><th>?�공+</th><th>?�패-</th><th>?�요P</th><th>?�태</th><th>구매</th></tr></thead>
-            <tbody id="trait-table-body"><tr><td colspan="6" class="table-empty">?�성치�? 불러?�는 중입?�다.</td></tr></tbody>
+            <thead><tr><th>특성명</th><th>성공+</th><th>실패-</th><th>필요P</th><th>상태</th><th>구매</th></tr></thead>
+            <tbody id="trait-table-body"><tr><td colspan="6" class="table-empty">특성치를 불러오는 중입니다.</td></tr></tbody>
           </table>
         </div>
       </article>
@@ -471,10 +471,10 @@ function renderMenuContent(menuId, profile) {
       <article class="content-card full">
         <div class="admin-shell">
           <div class="admin-section-tabs">
-            <button type="button" class="tab-button ${activeAdminSection === "user-adjust" ? "active" : ""}" data-admin-section="user-adjust">?��? 조정</button>
-            <button type="button" class="tab-button ${activeAdminSection === "item-db" ? "active" : ""}" data-admin-section="item-db">?�이??추�?</button>
-            <button type="button" class="tab-button ${activeAdminSection === "notice" ? "active" : ""}" data-admin-section="notice">공�? ?�성</button>
-            <button type="button" class="tab-button ${activeAdminSection === "account" ? "active" : ""}" data-admin-section="account">계정 관�?/button>
+            <button type="button" class="tab-button ${activeAdminSection === "user-adjust" ? "active" : ""}" data-admin-section="user-adjust">유저 조정</button>
+            <button type="button" class="tab-button ${activeAdminSection === "item-db" ? "active" : ""}" data-admin-section="item-db">아이템 추가</button>
+            <button type="button" class="tab-button ${activeAdminSection === "notice" ? "active" : ""}" data-admin-section="notice">공지 작성</button>
+            <button type="button" class="tab-button ${activeAdminSection === "account" ? "active" : ""}" data-admin-section="account">계정 관리</button>
           </div>
           <div id="admin-section-body"></div>
         </div>
@@ -497,7 +497,7 @@ async function hydrateShopPanel({ onProfilePatched, onToast }) {
     const itemDbMap = new Map(itemDbItems.map((item) => [item.id, item]));
 
     if (!shopItems.length) {
-      shopGrid.innerHTML = '<article class="content-card full"><p class="muted">?�점 컬렉?�에 ?�이?�이 ?�습?�다.</p></article>';
+      shopGrid.innerHTML = '<article class="content-card full"><p class="muted">상점 컬렉션에 아이템이 없습니다.</p></article>';
       return;
     }
 
@@ -507,10 +507,10 @@ async function hydrateShopPanel({ onProfilePatched, onToast }) {
           const itemMeta = itemDbMap.get(item.id) || {};
           return `
           <article class="content-card shop-item-card">
-            <div class="dot-slot large">${escapeHtml(itemMeta.icon || "?��")}</div>
+            <div class="dot-slot large">${escapeHtml(itemMeta.icon || "🎁")}</div>
             <div class="content-meta">
-              <h3>${escapeHtml(item.name || "?�름 ?�음")}</h3>
-              <p>${escapeHtml(item.description || "?�명 ?�음")}</p>
+              <h3>${escapeHtml(item.name || "이름 없음")}</h3>
+              <p>${escapeHtml(item.description || "설명 없음")}</p>
               <strong>${Number(item.price || 0)} G</strong>
             </div>
             <button type="button" class="primary-button compact-button" data-shop-purchase="${escapeHtml(item.id)}">구매</button>
@@ -525,14 +525,14 @@ async function hydrateShopPanel({ onProfilePatched, onToast }) {
         try {
           await withPendingToast(onToast, () => purchaseShopItem(button.dataset.shopPurchase));
           await onProfilePatched();
-          onToast("?�이?�을 구매?�습?�다.");
+          onToast("아이템을 구매했습니다.");
         } catch (error) {
           onToast(error.message, true);
         }
       });
     });
   } catch (_error) {
-    shopGrid.innerHTML = '<article class="content-card full"><p class="muted">?�점 ?�보�?불러?��? 못했?�니??</p></article>';
+    shopGrid.innerHTML = '<article class="content-card full"><p class="muted">상점 정보를 불러오지 못했습니다.</p></article>';
   }
 }
 
@@ -544,7 +544,7 @@ async function hydrateItemDatabasePanel() {
     const itemDbItems = await fetchCollectionItems("item-db", "sortOrder");
 
     if (!itemDbItems.length) {
-      grid.innerHTML = '<article class="content-card full"><p class="muted">?�이??DB???�록???�이?�이 ?�습?�다.</p></article>';
+      grid.innerHTML = '<article class="content-card full"><p class="muted">아이템 DB에 등록된 아이템이 없습니다.</p></article>';
       return;
     }
 
@@ -552,18 +552,18 @@ async function hydrateItemDatabasePanel() {
       .map(
         (item) => `
           <article class="content-card item-db-card">
-            <div class="item-db-icon">${escapeHtml(item.icon || "?��")}</div>
+            <div class="item-db-icon">${escapeHtml(item.icon || "🎁")}</div>
             <div class="content-meta">
-              <h3>${escapeHtml(item.name || "?�름 ?�음")}</h3>
-              <p>${escapeHtml(item.description || "?�명 ?�음")}</p>
-              <span class="pill-badge">${escapeHtml(item.category || "기�?")}</span>
+              <h3>${escapeHtml(item.name || "이름 없음")}</h3>
+              <p>${escapeHtml(item.description || "설명 없음")}</p>
+              <span class="pill-badge">${escapeHtml(item.category || "기타")}</span>
             </div>
           </article>
         `
       )
       .join("");
   } catch (_error) {
-    grid.innerHTML = '<article class="content-card full"><p class="muted">?�이??DB�?불러?��? 못했?�니??</p></article>';
+    grid.innerHTML = '<article class="content-card full"><p class="muted">아이템 DB를 불러오지 못했습니다.</p></article>';
   }
 }
 
@@ -591,7 +591,7 @@ async function hydrateBugReportPanel(profile, onToast) {
         createdAtText: new Date().toLocaleString("ko-KR"),
       });
       form.reset();
-      onToast?.("버그 리포?��? ?�록?�습?�다.");
+      onToast?.("버그 리포트를 등록했습니다.");
     });
   }
 
@@ -611,9 +611,9 @@ async function renderBugReports() {
       pageSize: 5,
     });
 
-    label.textContent = `${result.page + 1} ?�이지`;
+    label.textContent = `${result.page + 1} 페이지`;
     if (!result.items.length) {
-      body.innerHTML = '<tr><td colspan="4" class="table-empty">?�수??버그 리포?��? ?�습?�다.</td></tr>';
+      body.innerHTML = '<tr><td colspan="4" class="table-empty">접수된 버그 리포트가 없습니다.</td></tr>';
     } else {
       body.innerHTML = result.items
         .map((item) => {
@@ -642,7 +642,7 @@ async function renderBugReports() {
       };
     }
   } catch (_error) {
-    body.innerHTML = '<tr><td colspan="4" class="table-empty">버그 리포?��? 불러?��? 못했?�니??</td></tr>';
+    body.innerHTML = '<tr><td colspan="4" class="table-empty">버그 리포트를 불러오지 못했습니다.</td></tr>';
   }
 }
 
@@ -653,13 +653,13 @@ async function hydrateAdminItemOptions() {
   try {
     const items = await fetchCollectionItems("item-db", "sortOrder");
     select.innerHTML = `
-      <option value="">?�이?�을 ?�택?�세??/option>
+      <option value="">아이템을 선택하세요</option>
       ${items
-        .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.icon || "?��")} ${escapeHtml(item.name || item.id)}</option>`)
+        .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.icon || "🎁")} ${escapeHtml(item.name || item.id)}</option>`)
         .join("")}
     `;
   } catch (_error) {
-    select.innerHTML = '<option value="">?�이?�을 불러?��? 못했?�니??/option>';
+    select.innerHTML = '<option value="">아이템을 불러오지 못했습니다</option>';
   }
 }
 
@@ -669,7 +669,7 @@ function renderAdminItemQueue() {
   if (!queue) return;
 
   if (!pendingAdminItemIds.length) {
-    queue.innerHTML = '<span class="muted">?�택???�이?�이 ?�습?�다.</span>';
+    queue.innerHTML = '<span class="muted">선택한 아이템이 없습니다.</span>';
     return;
   }
 
@@ -717,7 +717,7 @@ function renderProfileQuickButton({ profile, onProfilePatched, onToast }) {
     button.id = "profile-quick-button";
     button.type = "button";
     button.className = "ghost-button";
-    button.textContent = "간단 ?�로??보기";
+    button.textContent = "간단 프로필 보기";
     headerActions.prepend(button);
   }
 
@@ -736,7 +736,7 @@ async function showProfileQuickModal({ profile, onProfilePatched, onToast }) {
   if (!content || !fileInput || !sealButton || !closeButton || !closeIcon) return;
 
   modal.classList.remove("hidden");
-  content.innerHTML = '<div class="panel empty-state">���� �������� �ҷ����� ���Դϴ�.</div>';
+  content.innerHTML = '<div class="panel empty-state">간단 프로필을 불러오는 중입니다.</div>';
 
   const [rankings, traits] = await Promise.all([
     getCachedRankingBoard().catch(() => []),
@@ -763,8 +763,8 @@ async function showProfileQuickModal({ profile, onProfilePatched, onToast }) {
         <div class="profile-seal-panel">
           ${
             profile.profileSealImage
-              ? `<img src="${escapeHtml(profile.profileSealImage)}" alt="?�로???�장" class="profile-seal-art" />`
-              : `<div class="profile-seal-fallback">?�장</div>`
+              ? `<img src="${escapeHtml(profile.profileSealImage)}" alt="프로필 인장" class="profile-seal-art" />`
+              : `<div class="profile-seal-fallback">인장</div>`
           }
         </div>
       </div>
@@ -772,16 +772,16 @@ async function showProfileQuickModal({ profile, onProfilePatched, onToast }) {
         <p class="eyebrow">PLAYER LOBBY</p>
         <h2>${escapeHtml(profile.characterName || "-")}</h2>
         <div class="profile-lobby-grid">
-          <div><span>?�혼 ?�네??/span><strong>${escapeHtml(profile.nickname || "-")}</strong></div>
-          <div><span>?�재 ??�� ?�위</span><strong>${rankEntry?.displayRank ? `${rankEntry.displayRank}?? : "-"}</strong></div>
-          <div><span>??��???�인??/span><strong>${Number(profile.rankingPoints || 0)}</strong></div>
-          <div><span>�??��???/span><strong>${Number(profile.totalMatches || 0)}</strong></div>
-          <div><span>보유 ?�화</span><strong>${Number(profile.currency || 0)} G</strong></div>
-          <div><span>�??�탯 ?�인??/span><strong>${totalTraitPoints}</strong></div>
+          <div><span>작혼 닉네임</span><strong>${escapeHtml(profile.nickname || "-")}</strong></div>
+          <div><span>현재 랭킹 순위</span><strong>${rankEntry?.displayRank ? `${rankEntry.displayRank}위` : "-"}</strong></div>
+          <div><span>랭킹전 포인트</span><strong>${Number(profile.rankingPoints || 0)}</strong></div>
+          <div><span>총 대국 수</span><strong>${Number(profile.totalMatches || 0)}</strong></div>
+          <div><span>보유 재화</span><strong>${Number(profile.currency || 0)} G</strong></div>
+          <div><span>총 스탯 포인트</span><strong>${totalTraitPoints}</strong></div>
         </div>
         <div class="profile-lobby-traits">
-          <span>보유 ?�성�?종류</span>
-          <strong>${escapeHtml(traitNames.length ? traitNames.join(", ") : "?�음")}</strong>
+          <span>보유 특성치 종류</span>
+          <strong>${escapeHtml(traitNames.length ? traitNames.join(", ") : "없음")}</strong>
         </div>
       </div>
       <div class="profile-lobby-stripes" aria-hidden="true">
@@ -799,10 +799,10 @@ async function showProfileQuickModal({ profile, onProfilePatched, onToast }) {
       const updatedProfile = await updateProfileSealImage(optimizedDataUrl);
       invalidateQuickProfileCaches();
       await onProfilePatched(updatedProfile);
-      onToast("?�로???�장???�?�했?�니??");
+      onToast("프로필 인장을 저장했습니다.");
       await showProfileQuickModal({ profile: updatedProfile, onProfilePatched, onToast });
     } catch (error) {
-      if (error.message !== "?��?지 ?�택??취소?�었?�니??") {
+      if (error.message !== "이미지 선택이 취소되었습니다.") {
         onToast(error.message, true);
       }
     } finally {
@@ -827,15 +827,15 @@ function ensureProfileQuickModal() {
       <div class="modal-head">
         <div>
           <p class="eyebrow">PLAYER LOBBY</p>
-          <h2>간단 ?�로??/h2>
+          <h2>간단 프로필</h2>
         </div>
         <button id="profile-quick-close-icon" type="button" class="icon-button">x</button>
       </div>
       <div id="profile-quick-card"></div>
       <div class="profile-quick-actions">
         <input id="profile-seal-input" type="file" accept="image/*" class="hidden" />
-        <button id="profile-seal-button" type="button" class="ghost-button">?�로???�장 ?�정</button>
-        <button id="profile-quick-close" type="button" class="primary-button">?�기</button>
+        <button id="profile-seal-button" type="button" class="ghost-button">프로필 인장 수정</button>
+        <button id="profile-quick-close" type="button" class="primary-button">닫기</button>
       </div>
     </div>
   `;
@@ -861,12 +861,12 @@ async function openProfileSealCropModal(file) {
   const cancelButton = modal.querySelector("#profile-seal-crop-cancel");
   const closeIcon = modal.querySelector("#profile-seal-crop-close-icon");
   if (!canvas || !zoomInput || !offsetXInput || !offsetYInput || !confirmButton || !cancelButton || !closeIcon) {
-    throw new Error("?�르�??�구�?준비하지 못했?�니??");
+    throw new Error("자르기 도구를 준비하지 못했습니다.");
   }
 
   const context = canvas.getContext("2d");
   if (!context) {
-    throw new Error("?��?지 ?�르기�? ?�작?��? 못했?�니??");
+    throw new Error("이미지 자르기를 시작하지 못했습니다.");
   }
 
   let zoom = 1;
@@ -936,7 +936,7 @@ async function openProfileSealCropModal(file) {
     const cancel = () => {
       cleanup();
       close();
-      reject(new Error("?��?지 ?�택??취소?�었?�니??"));
+      reject(new Error("이미지 선택이 취소되었습니다."));
     };
 
     cancelButton.onclick = cancel;
@@ -956,21 +956,21 @@ function ensureProfileSealCropModal() {
       <div class="modal-head">
         <div>
           <p class="eyebrow">SEAL CROP</p>
-          <h2>?�장 ?��?지 ?�르�?/h2>
+          <h2>인장 이미지 자르기</h2>
         </div>
         <button id="profile-seal-crop-close-icon" type="button" class="icon-button">x</button>
       </div>
       <div class="profile-seal-crop-layout">
         <canvas id="profile-seal-crop-canvas" class="profile-seal-crop-canvas"></canvas>
         <div class="stack-form compact-form">
-          <label><span>?��?</span><input id="profile-seal-crop-zoom" type="range" min="100" max="220" value="100" /></label>
-          <label><span>가�??�동</span><input id="profile-seal-crop-offset-x" type="range" min="-100" max="100" value="0" /></label>
-          <label><span>?�로 ?�동</span><input id="profile-seal-crop-offset-y" type="range" min="-100" max="100" value="0" /></label>
+          <label><span>확대</span><input id="profile-seal-crop-zoom" type="range" min="100" max="220" value="100" /></label>
+          <label><span>가로 이동</span><input id="profile-seal-crop-offset-x" type="range" min="-100" max="100" value="0" /></label>
+          <label><span>세로 이동</span><input id="profile-seal-crop-offset-y" type="range" min="-100" max="100" value="0" /></label>
         </div>
       </div>
       <div class="profile-quick-actions">
         <button id="profile-seal-crop-cancel" type="button" class="ghost-button">취소</button>
-        <button id="profile-seal-crop-confirm" type="button" class="primary-button">?�용</button>
+        <button id="profile-seal-crop-confirm" type="button" class="primary-button">적용</button>
       </div>
     </div>
   `;
@@ -988,7 +988,7 @@ function attachTodoEvents({ profile, onToast }) {
     const todoText = String(payload.todoText || "").trim();
 
     if (!todoText) {
-      onToast("메모 ?�용???�력??주세??", true);
+      onToast("메모 내용을 입력해 주세요.", true);
       return;
     }
 
@@ -1003,9 +1003,9 @@ function attachTodoEvents({ profile, onToast }) {
       );
       form.reset();
       await hydrateTodoPanel(profile.uid);
-      onToast("???�을 추�??�습?�다.");
+      onToast("할 일을 추가했습니다.");
     } catch (error) {
-      onToast(error.message || "???�을 추�??��? 못했?�니??", true);
+      onToast(error.message || "할 일을 추가하지 못했습니다.", true);
     }
   });
 }
@@ -1026,7 +1026,7 @@ async function hydrateTodoPanel(uid) {
     todoPage = Math.min(todoPage, pageCount - 1);
 
     if (!items.length) {
-      list.innerHTML = '<p class="muted">?�록?????�이 ?�습?�다.</p>';
+      list.innerHTML = '<p class="muted">등록된 할 일이 없습니다.</p>';
       pager.innerHTML = "";
       pager.classList.add("hidden");
       return;
@@ -1042,20 +1042,20 @@ async function hydrateTodoPanel(uid) {
               <strong>${escapeHtml(item.text || "")}</strong>
               ${
                 item.uid === uid
-                  ? `<button type="button" class="ghost-button compact-button todo-delete-button" data-todo-delete="${item.id}">??��</button>`
+                  ? `<button type="button" class="ghost-button compact-button todo-delete-button" data-todo-delete="${item.id}">삭제</button>`
                   : ""
               }
             </div>
-            <p class="muted">${escapeHtml(item.characterName || "?�명")}</p>
+            <p class="muted">${escapeHtml(item.characterName || "익명")}</p>
           </article>
         `
       )
       .join("");
 
     pager.innerHTML = `
-      <button type="button" class="ghost-button compact-button" data-todo-page="prev" ${todoPage === 0 ? "disabled" : ""}>?�전</button>
+      <button type="button" class="ghost-button compact-button" data-todo-page="prev" ${todoPage === 0 ? "disabled" : ""}>이전</button>
       <span class="muted">${todoPage + 1} / ${pageCount}</span>
-      <button type="button" class="ghost-button compact-button" data-todo-page="next" ${todoPage >= pageCount - 1 ? "disabled" : ""}>?�음</button>
+      <button type="button" class="ghost-button compact-button" data-todo-page="next" ${todoPage >= pageCount - 1 ? "disabled" : ""}>다음</button>
     `;
     pager.classList.toggle("hidden", pageCount <= 1);
 
@@ -1067,7 +1067,7 @@ async function hydrateTodoPanel(uid) {
         } catch (_error) {
           list.insertAdjacentHTML(
             "afterbegin",
-            '<p class="muted">???�을 ??��?��? 못했?�니??</p>'
+            '<p class="muted">할 일을 삭제하지 못했습니다.</p>'
           );
         }
       });
@@ -1085,7 +1085,7 @@ async function hydrateTodoPanel(uid) {
       });
     });
   } catch (_error) {
-    list.innerHTML = '<p class="muted">????목록??불러?��? 못했?�니??</p>';
+    list.innerHTML = '<p class="muted">할 일 목록을 불러오지 못했습니다.</p>';
     pager.innerHTML = "";
     pager.classList.add("hidden");
   }
@@ -1099,7 +1099,7 @@ async function hydrateRankingPanel() {
     const rankings = buildDisplayRankings(await getRankingBoard());
 
     if (!rankings.length) {
-      body.innerHTML = '<tr><td colspan="6" class="table-empty">?�시????��???�습?�다.</td></tr>';
+      body.innerHTML = '<tr><td colspan="6" class="table-empty">표시할 랭킹이 없습니다.</td></tr>';
       return;
     }
 
@@ -1118,7 +1118,7 @@ async function hydrateRankingPanel() {
       })
       .join("");
   } catch (_error) {
-    body.innerHTML = '<tr><td colspan="6" class="table-empty">??��??불러?��? 못했?�니??</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="table-empty">랭킹을 불러오지 못했습니다.</td></tr>';
   }
 }
 
@@ -1137,13 +1137,13 @@ function attachParcelForm({ profile, onProfilePatched, onToast }) {
       .map((itemKey) => inventoryItems.find((item) => buildInventoryItemKey(item) === itemKey))
       .filter(Boolean);
     if (!selectedItems.length) {
-      selectedItem.textContent = "?�택???�이?�이 ?�습?�다.";
+      selectedItem.textContent = "선택한 아이템이 없습니다.";
       selectedItem.classList.add("muted");
       return;
     }
     const countedItems = Array.from(
       selectedItems.reduce((map, item) => {
-        const label = `${item.icon || "?��"} ${item.name || "?�이??}`;
+        const label = `${item.icon || "🎁"} ${item.name || "아이템"}`;
         map.set(label, (map.get(label) || 0) + 1);
         return map;
       }, new Map())
@@ -1227,7 +1227,7 @@ function attachParcelForm({ profile, onProfilePatched, onToast }) {
       selectedParcelItemKeys = [];
       renderSelectedParcelItem();
       await onProfilePatched();
-      onToast(`${profile.characterName}???�포�?보냈?�니??`);
+      onToast(`${profile.characterName}의 소포를 보냈습니다.`);
     } catch (error) {
       onToast(error.message, true);
     }
@@ -1253,7 +1253,7 @@ async function renderAnnouncements({ profile, onProfilePatched, onToast }) {
     const visibleAnnouncements = announcements.filter((item) => !dismissedIds.has(item.id));
 
     if (!visibleAnnouncements.length) {
-      list.innerHTML = '<p class="muted">?�인??공�?가 ?�습?�다.</p>';
+      list.innerHTML = '<p class="muted">확인할 공지가 없습니다.</p>';
       return;
     }
 
@@ -1262,8 +1262,8 @@ async function renderAnnouncements({ profile, onProfilePatched, onToast }) {
         (announcement) => `
           <article class="info-card">
             <div class="info-card-head">
-              <strong>${escapeHtml(announcement.title || "공�?")}</strong>
-              <button type="button" class="ghost-button compact-button" data-dismiss-announcement="${announcement.id}">?�기</button>
+              <strong>${escapeHtml(announcement.title || "공지")}</strong>
+              <button type="button" class="ghost-button compact-button" data-dismiss-announcement="${announcement.id}">닫기</button>
             </div>
             <p>${escapeHtml(announcement.body || "")}</p>
           </article>
@@ -1280,14 +1280,14 @@ async function renderAnnouncements({ profile, onProfilePatched, onToast }) {
           await onProfilePatched(updatedProfile);
           await renderAnnouncements({ profile: updatedProfile, onProfilePatched, onToast });
           await hydrateNotificationBadge(updatedProfile);
-          onToast("공�?�??�았?�니??");
+          onToast("공지를 닫았습니다.");
         } catch (error) {
           onToast(error.message, true);
         }
       });
     });
   } catch (_error) {
-    list.innerHTML = '<p class="muted">공�?�?불러?��? 못했?�니??</p>';
+    list.innerHTML = '<p class="muted">공지를 불러오지 못했습니다.</p>';
   }
 }
 
@@ -1299,7 +1299,7 @@ async function renderNotifications({ profile, onToast }) {
     const notifications = await fetchNotifications(profile.uid, 10);
 
     if (!notifications.length) {
-      list.innerHTML = '<p class="muted">???�림???�습?�다.</p>';
+      list.innerHTML = '<p class="muted">새 알림이 없습니다.</p>';
       return;
     }
 
@@ -1308,11 +1308,11 @@ async function renderNotifications({ profile, onToast }) {
         (item) => `
           <article class="info-card ${item.isRead ? "is-read" : "is-unread"}">
             <div class="info-card-head">
-              <strong>${escapeHtml(item.message || "?�림")}</strong>
+              <strong>${escapeHtml(item.message || "알림")}</strong>
               ${
                 item.isRead
-                  ? '<span class="pill-badge">?�음</span>'
-                  : `<button type="button" class="ghost-button compact-button" data-read-notification="${item.id}">?�음 처리</button>`
+                  ? '<span class="pill-badge">읽음</span>'
+                  : `<button type="button" class="ghost-button compact-button" data-read-notification="${item.id}">읽음 처리</button>`
               }
             </div>
           </article>
@@ -1328,14 +1328,14 @@ async function renderNotifications({ profile, onToast }) {
           );
           await renderNotifications({ profile, onToast });
           await hydrateNotificationBadge(profile);
-          onToast("?�림???�음 처리?�습?�다.");
+          onToast("알림을 읽음 처리했습니다.");
         } catch (error) {
           onToast(error.message, true);
         }
       });
     });
   } catch (_error) {
-    list.innerHTML = '<p class="muted">?�림??불러?��? 못했?�니??</p>';
+    list.innerHTML = '<p class="muted">알림을 불러오지 못했습니다.</p>';
   }
 }
 
@@ -1376,13 +1376,13 @@ function renderNotificationBell({ profile, onProfilePatched, onToast }) {
     wrap.id = "header-notification-wrap";
     wrap.className = "notification-bell-wrap";
     wrap.innerHTML = `
-      <button id="header-notification-button" type="button" class="notification-bell-button" aria-label="?�림 ?�기">
-        <span class="notification-bell-icon">?��</span>
+      <button id="header-notification-button" type="button" class="notification-bell-button" aria-label="알림 열기">
+        <span class="notification-bell-icon">🔔</span>
         <span id="header-notification-badge" class="notification-bell-badge hidden">0</span>
       </button>
       <div id="header-notification-panel" class="notification-panel hidden">
         <div id="header-notification-list" class="stack-list">
-          <p class="muted">?�림??불러?�는 중입?�다.</p>
+          <p class="muted">알림을 불러오는 중입니다.</p>
         </div>
       </div>
     `;
@@ -1419,7 +1419,7 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
     ]);
     const dismissedIds = new Set(profile.dismissedAnnouncementIds || []);
     const hasRejectTicket = Array.isArray(profile.inventory)
-      ? profile.inventory.some((item) => item?.name === "거절�?)
+      ? profile.inventory.some((item) => item?.name === "거절권")
       : false;
 
     const announcementCards = announcements
@@ -1430,8 +1430,8 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
         html: `
           <article class="info-card compact-info">
             <div class="info-card-head">
-              <strong>${escapeHtml(item.title || "공�?")}</strong>
-              <button type="button" class="ghost-button compact-button" data-dismiss-announcement="${item.id}">?�기</button>
+              <strong>${escapeHtml(item.title || "공지")}</strong>
+              <button type="button" class="ghost-button compact-button" data-dismiss-announcement="${item.id}">닫기</button>
             </div>
             <p>${escapeHtml(item.body || "")}</p>
           </article>
@@ -1444,7 +1444,7 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
       html: `
           <article class="info-card compact-info ${item.isRead ? "is-read" : "is-unread"}">
             <div class="info-card-head">
-              <strong>${escapeHtml(item.message || "?�림")}</strong>
+              <strong>${escapeHtml(item.message || "알림")}</strong>
             </div>
           </article>
         `,
@@ -1452,12 +1452,12 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
 
     const parcelCards = parcels.map((item) => {
         const itemPreview = item.wrapped
-          ? "?�용물을 ?�인?????�는 ?�장 ?�포?�니??"
+          ? "내용물을 확인할 수 없는 포장 소포입니다."
           : buildParcelDisplayText(item);
         const rejectControl = item.wrapped
           ? hasRejectTicket
             ? `<button type="button" class="ghost-button compact-button" data-parcel-action="reject" data-parcel-id="${item.id}">거절</button>`
-            : '<span class="pill-badge">거절�??�요</span>'
+            : '<span class="pill-badge">거절권 필요</span>'
           : `<button type="button" class="ghost-button compact-button" data-parcel-action="reject" data-parcel-id="${item.id}">거절</button>`;
         return {
           id: `parcel-${item.id}`,
@@ -1465,12 +1465,12 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
           html: `
           <article class="info-card compact-info ${item.wrapped ? "is-unread" : ""}">
             <div class="info-card-head">
-              <strong>${escapeHtml(item.senderCharacterName || "?�포")}</strong>
-              <span class="pill-badge">${item.wrapped ? "?�장 ?�포" : "?�반 ?�포"}</span>
+              <strong>${escapeHtml(item.senderCharacterName || "소포")}</strong>
+              <span class="pill-badge">${item.wrapped ? "포장 소포" : "일반 소포"}</span>
             </div>
             <p>${escapeHtml(itemPreview)}</p>
             <div class="action-row">
-              <button type="button" class="primary-button compact-button" data-parcel-action="accept" data-parcel-id="${item.id}">?�락</button>
+              <button type="button" class="primary-button compact-button" data-parcel-action="accept" data-parcel-id="${item.id}">수락</button>
               ${rejectControl}
             </div>
           </article>
@@ -1495,12 +1495,12 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
             ${pageItems.map((item) => item.html).join("")}
           </div>
           <div class="notification-pager ${pageCount > 1 ? "" : "hidden"}">
-            <button type="button" class="ghost-button compact-button" data-notification-page="prev" ${notificationPanelPage === 0 ? "disabled" : ""}>?�전</button>
+            <button type="button" class="ghost-button compact-button" data-notification-page="prev" ${notificationPanelPage === 0 ? "disabled" : ""}>이전</button>
             <span class="muted">${notificationPanelPage + 1} / ${pageCount}</span>
-            <button type="button" class="ghost-button compact-button" data-notification-page="next" ${notificationPanelPage >= pageCount - 1 ? "disabled" : ""}>?�음</button>
+            <button type="button" class="ghost-button compact-button" data-notification-page="next" ${notificationPanelPage >= pageCount - 1 ? "disabled" : ""}>다음</button>
           </div>
         `
-      : '<p class="muted">???�림???�습?�다.</p>';
+      : '<p class="muted">새 알림이 없습니다.</p>';
 
     list.querySelectorAll("[data-dismiss-announcement]").forEach((button) => {
       button.addEventListener("click", async () => {
@@ -1527,7 +1527,7 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
           await onProfilePatched(latestProfile);
           await hydrateNotificationBadge(latestProfile);
           await renderNotificationBellPanel({ profile: latestProfile, onProfilePatched, onToast });
-          onToast("?�포 ?�태�?처리?�습?�다.");
+          onToast("소포 상태를 처리했습니다.");
         } catch (error) {
           onToast(error.message, true);
         }
@@ -1547,7 +1547,7 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
       });
     });
   } catch (_error) {
-    list.innerHTML = '<p class="muted">?�림??불러?��? 못했?�니??</p>';
+    list.innerHTML = '<p class="muted">알림을 불러오지 못했습니다.</p>';
   }
 }
 
@@ -1565,7 +1565,7 @@ async function renderIncomingParcels({ profile, onProfilePatched, onToast }) {
     const snapshot = await getDocs(parcelQuery);
 
     if (snapshot.empty) {
-      list.innerHTML = '<p class="muted">받�? ?�포가 ?�습?�다.</p>';
+      list.innerHTML = '<p class="muted">받은 소포가 없습니다.</p>';
       return;
     }
 
@@ -1574,8 +1574,8 @@ async function renderIncomingParcels({ profile, onProfilePatched, onToast }) {
         const data = parcelDoc.data();
         const itemLabel = escapeHtml(buildParcelDisplayText(data));
         const currencyLabel = Number(data.currencyAmount || 0)
-          ? `?�화 ${Number(data.currencyAmount || 0)} G`
-          : "?�화 ?�음";
+          ? `재화 ${Number(data.currencyAmount || 0)} G`
+          : "재화 없음";
         return `
           <article class="info-card">
             <div class="info-card-head">
@@ -1583,12 +1583,12 @@ async function renderIncomingParcels({ profile, onProfilePatched, onToast }) {
               <span class="pill-badge">${escapeHtml(data.status || "-")}</span>
             </div>
             <p>${itemLabel}${Number(data.currencyAmount || 0) ? ` / ${currencyLabel}` : ""}</p>
-            <p>${data.wrapped ? "?�장 ?�포" : "?�반 ?�포"}</p>
+            <p>${data.wrapped ? "포장 소포" : "일반 소포"}</p>
             ${
               data.status === "pending"
                 ? `
                   <div class="action-row">
-                    <button type="button" class="primary-button compact-button" data-parcel-action="accept" data-parcel-id="${parcelDoc.id}">?�령</button>
+                    <button type="button" class="primary-button compact-button" data-parcel-action="accept" data-parcel-id="${parcelDoc.id}">수령</button>
                     ${
                       data.wrapped
                         ? ""
@@ -1610,14 +1610,14 @@ async function renderIncomingParcels({ profile, onProfilePatched, onToast }) {
             respondParcel(button.dataset.parcelId, button.dataset.parcelAction)
           );
           await onProfilePatched();
-          onToast("?�포 ?�태�?처리?�습?�다.");
+          onToast("소포 상태를 처리했습니다.");
         } catch (error) {
           onToast(error.message, true);
         }
       });
     });
   } catch (_error) {
-    list.innerHTML = '<p class="muted">받�? ?�포�?불러?��? 못했?�니??</p>';
+    list.innerHTML = '<p class="muted">받은 소포를 불러오지 못했습니다.</p>';
   }
 }
 
@@ -1635,7 +1635,7 @@ async function renderOutgoingParcels({ profile }) {
     const snapshot = await getDocs(parcelQuery);
 
     if (snapshot.empty) {
-      list.innerHTML = '<p class="muted">보낸 ?�포가 ?�습?�다.</p>';
+      list.innerHTML = '<p class="muted">보낸 소포가 없습니다.</p>';
       return;
     }
 
@@ -1644,8 +1644,8 @@ async function renderOutgoingParcels({ profile }) {
         const data = parcelDoc.data();
         const itemLabel = escapeHtml(buildParcelDisplayText(data));
         const currencyLabel = Number(data.currencyAmount || 0)
-          ? `?�화 ${Number(data.currencyAmount || 0)} G`
-          : "?�화 ?�음";
+          ? `재화 ${Number(data.currencyAmount || 0)} G`
+          : "재화 없음";
         return `
           <article class="info-card">
             <div class="info-card-head">
@@ -1653,13 +1653,13 @@ async function renderOutgoingParcels({ profile }) {
               <span class="pill-badge">${escapeHtml(data.status || "-")}</span>
             </div>
             <p>${itemLabel}${Number(data.currencyAmount || 0) ? ` / ${currencyLabel}` : ""}</p>
-            <p>${data.wrapped ? "?�장 ?�포" : "?�반 ?�포"}</p>
+            <p>${data.wrapped ? "포장 소포" : "일반 소포"}</p>
           </article>
         `;
       })
       .join("");
   } catch (_error) {
-    list.innerHTML = '<p class="muted">보낸 ?�포�?불러?��? 못했?�니??</p>';
+    list.innerHTML = '<p class="muted">보낸 소포를 불러오지 못했습니다.</p>';
   }
 }
 
@@ -1671,7 +1671,7 @@ async function hydrateTraitPanel({ profile, onProfilePatched, onToast }) {
     const traitItems = await fetchCollectionItems("traits", "sortOrder");
 
     if (!traitItems.length) {
-      traitTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">traits 컬렉?�에 ?�성치�? ?�습?�다.</td></tr>';
+      traitTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">traits 컬렉션에 특성치가 없습니다.</td></tr>';
       return;
     }
 
@@ -1691,7 +1691,7 @@ async function hydrateTraitPanel({ profile, onProfilePatched, onToast }) {
         const isSelected = selectedTraitIds.has(trait.id);
         const requiredPoints = Number(trait.requiredPoints || 0);
         const isLocked = !isSelected && currentPoints < requiredPoints;
-        const statusLabel = isSelected ? "?�용 �? : isLocked ? "?�인??부�? : "구매 가??;
+        const statusLabel = isSelected ? "사용 중" : isLocked ? "포인트 부족" : "구매 가능";
         return `
           <tr>
             <td>${escapeHtml(trait.name || trait.id)}</td>
@@ -1701,7 +1701,7 @@ async function hydrateTraitPanel({ profile, onProfilePatched, onToast }) {
             <td>${statusLabel}</td>
             <td>
               <button type="button" class="ghost-button compact-button ${isSelected ? "is-owned" : ""}" data-trait-id="${trait.id}" ${isSelected || isLocked ? "disabled" : ""}>
-                ${isSelected ? "구매 ?�료" : "구매"}
+                ${isSelected ? "구매 완료" : "구매"}
               </button>
             </td>
           </tr>
@@ -1717,7 +1717,7 @@ async function hydrateTraitPanel({ profile, onProfilePatched, onToast }) {
             selectTrait(button.dataset.traitId)
           );
           await onProfilePatched(updatedProfile);
-          onToast("?�성치�? 구매?�습?�다.");
+          onToast("특성치를 구매했습니다.");
         } catch (error) {
           onToast(error.message, true);
           button.disabled = false;
@@ -1725,7 +1725,7 @@ async function hydrateTraitPanel({ profile, onProfilePatched, onToast }) {
       });
     });
   } catch (_error) {
-    traitTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">?�성치�? 불러?��? 못했?�니??</td></tr>';
+    traitTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">특성치를 불러오지 못했습니다.</td></tr>';
   }
 }
 
@@ -1742,7 +1742,7 @@ function attachRouletteEvents({ profile, onToast }) {
     const name = String(payload.name || "").trim();
 
     if (!name) {
-      onToast("??�� ?�름???�력??주세??", true);
+      onToast("항목 이름을 입력해 주세요.", true);
       return;
     }
 
@@ -1757,9 +1757,9 @@ function attachRouletteEvents({ profile, onToast }) {
       );
       form.reset();
       await hydrateRoulettePanel(profile);
-      onToast("룰렛 ??��??추�??�습?�다.");
+      onToast("룰렛 항목을 추가했습니다.");
     } catch (_error) {
-      onToast("룰렛 ??�� 추�????�패?�습?�다.", true);
+      onToast("룰렛 항목 추가에 실패했습니다.", true);
     }
   });
 
@@ -1767,7 +1767,7 @@ function attachRouletteEvents({ profile, onToast }) {
     const items = await fetchRouletteItems(profile.uid);
 
     if (!items.length) {
-      onToast("먼�? 룰렛 ??��??추�???주세??", true);
+      onToast("먼저 룰렛 항목을 추가해 주세요.", true);
       return;
     }
 
@@ -1782,7 +1782,7 @@ function attachRouletteEvents({ profile, onToast }) {
     wheel.classList.remove("spinning");
     void wheel.offsetWidth;
     wheel.classList.add("spinning");
-    result.textContent = "룰렛???�리??중입?�다.";
+    result.textContent = "룰렛을 돌리는 중입니다.";
 
     window.setTimeout(async () => {
       result.textContent = reward.name;
@@ -1800,9 +1800,9 @@ function attachRouletteEvents({ profile, onToast }) {
           attemptedAtId: logId,
         });
         await renderRecentRouletteLogs();
-        onToast("룰렛 로그�??�?�했?�니??");
+        onToast("룰렛 로그를 저장했습니다.");
       } catch (_error) {
-        onToast("룰렛 로그 ?�?�에 ?�패?�습?�다.", true);
+        onToast("룰렛 로그 저장에 실패했습니다.", true);
       } finally {
         button.disabled = false;
       }
@@ -1835,8 +1835,8 @@ function renderRouletteWheel(items) {
   if (!items.length) {
     wheel.classList.add("empty-wheel");
     wheel.style.background = "";
-    labels.innerHTML = '<span class="wheel-placeholder">??��??추�??�면 ?�판??만들?�집?�다.</span>';
-    result.textContent = "??��??추�??�면 ?�릴 ???�습?�다.";
+    labels.innerHTML = '<span class="wheel-placeholder">항목을 추가하면 원판이 만들어집니다.</span>';
+    result.textContent = "항목을 추가하면 돌릴 수 있습니다.";
     return;
   }
 
@@ -1868,7 +1868,7 @@ function renderRouletteItemList(items, profile) {
   if (!itemList) return;
 
   if (!items.length) {
-    itemList.innerHTML = '<p class="muted">?�록??룰렛 ??��???�습?�다.</p>';
+    itemList.innerHTML = '<p class="muted">등록된 룰렛 항목이 없습니다.</p>';
     return;
   }
 
@@ -1877,7 +1877,7 @@ function renderRouletteItemList(items, profile) {
       (item) => `
         <div class="roulette-item-row">
           <strong>${escapeHtml(item.name)}</strong>
-          <button type="button" class="ghost-button compact-button" data-roulette-remove="${item.id}">??��</button>
+          <button type="button" class="ghost-button compact-button" data-roulette-remove="${item.id}">삭제</button>
         </div>
       `
     )
@@ -1890,7 +1890,7 @@ function renderRouletteItemList(items, profile) {
           (message, isError = false) => {
             const result = document.querySelector("#roulette-result");
             if (result) {
-              result.textContent = isError ? message : "처리중입?�다";
+              result.textContent = isError ? message : "처리중입니다";
             }
           },
           () => deleteDoc(doc(db, "roulette-items", button.dataset.rouletteRemove))
@@ -1898,7 +1898,7 @@ function renderRouletteItemList(items, profile) {
         await hydrateRoulettePanel(profile);
       } catch (_error) {
         const result = document.querySelector("#roulette-result");
-        if (result) result.textContent = "룰렛 ??�� ??��???�패?�습?�다.";
+        if (result) result.textContent = "룰렛 항목 삭제에 실패했습니다.";
       }
     });
   });
@@ -1913,7 +1913,7 @@ async function renderRecentRouletteLogs() {
     const logSnapshot = await getDocs(logQuery);
 
     if (logSnapshot.empty) {
-      logBody.innerHTML = '<tr><td colspan="3" class="table-empty">?�직 로그가 ?�습?�다.</td></tr>';
+      logBody.innerHTML = '<tr><td colspan="3" class="table-empty">아직 로그가 없습니다.</td></tr>';
       return;
     }
 
@@ -1925,7 +1925,7 @@ async function renderRecentRouletteLogs() {
       })
       .join("");
   } catch (_error) {
-    logBody.innerHTML = '<tr><td colspan="3" class="table-empty">로그�?불러?��? 못했?�니??</td></tr>';
+    logBody.innerHTML = '<tr><td colspan="3" class="table-empty">로그를 불러오지 못했습니다.</td></tr>';
   }
 }
 
@@ -1960,61 +1960,61 @@ function renderAdminSection(body) {
     "user-adjust": `
       <div class="admin-section-grid">
         <article class="content-card">
-          <h3>?��? 조정</h3>
+          <h3>유저 조정</h3>
           <form id="admin-manage-form" class="stack-form compact-form admin-manage-grid">
             <label class="admin-wide-field">
-              <span>?�???�션</span>
+              <span>대상 옵션</span>
               <label class="inline-check parcel-wrap-check admin-toggle-check">
                 <input type="checkbox" name="applyToAllUsers" />
                 <span class="check-indicator" aria-hidden="true"></span>
                 <span class="check-copy">
-                  <strong>?�체 ?��? ?�??/strong>
-                  <small>체크?�면 모든 ?��??�게 같�? 조정???�용?�니??</small>
+                  <strong>전체 유저 대상</strong>
+                  <small>체크하면 모든 유저에게 같은 조정을 적용합니다.</small>
                 </span>
               </label>
             </label>
-            <label><span>?�??캐릭?�명</span><input type="text" name="targetCharacterName" placeholder="캐릭?�명" required /></label>
-            <label><span>?�화 증감</span><input type="number" name="currencyDelta" value="0" /></label>
-            <label><span>?�성�??�인??증감</span><input type="number" name="traitPointDelta" value="0" /></label>
+            <label><span>대상 캐릭터명</span><input type="text" name="targetCharacterName" placeholder="캐릭터명" required /></label>
+            <label><span>재화 증감</span><input type="number" name="currencyDelta" value="0" /></label>
+            <label><span>특성치 포인트 증감</span><input type="number" name="traitPointDelta" value="0" /></label>
             <label>
-              <span>지�??�이???�택</span>
+              <span>지급 아이템 선택</span>
               <select name="addItemId" id="admin-item-select">
-                <option value="">?�이?�을 ?�택?�세??/option>
+                <option value="">아이템을 선택하세요</option>
               </select>
             </label>
             <div class="admin-item-picker-row">
-              <button type="button" class="ghost-button" id="admin-add-item-button">?�이??추�?</button>
+              <button type="button" class="ghost-button" id="admin-add-item-button">아이템 추가</button>
               <div id="admin-item-queue" class="admin-item-queue"></div>
             </div>
             <label>
-              <span>권한 변�?/span>
+              <span>권한 변경</span>
               <select name="setRole">
-                <option value="">변�?????/option>
+                <option value="">변경 안 함</option>
                 <option value="user">user</option>
                 <option value="moderator">moderator</option>
                 <option value="gm">gm</option>
                 <option value="admin">admin</option>
               </select>
             </label>
-            <button type="submit" class="primary-button">?�용</button>
+            <button type="submit" class="primary-button">적용</button>
           </form>
         </article>
         <article class="content-card">
           <div class="admin-log-head">
-            <h3>?��? 조정 로그</h3>
+            <h3>유저 조정 로그</h3>
             <div class="admin-log-pager">
-              <button type="button" class="ghost-button compact-button" data-log-page="operate-prev">?�전</button>
-              <span id="operate-log-page-label" class="muted">1 ?�이지</span>
-              <button type="button" class="ghost-button compact-button" data-log-page="operate-next">?�음</button>
+              <button type="button" class="ghost-button compact-button" data-log-page="operate-prev">이전</button>
+              <span id="operate-log-page-label" class="muted">1 페이지</span>
+              <button type="button" class="ghost-button compact-button" data-log-page="operate-next">다음</button>
             </div>
           </div>
           <div class="table-wrap">
             <table class="log-table">
               <thead>
-                <tr><th>?�각</th><th>?�영�?/th><th>?�??/th><th>?�용</th></tr>
+                <tr><th>시각</th><th>운영진</th><th>대상</th><th>내용</th></tr>
               </thead>
               <tbody id="operate-log-body">
-                <tr><td colspan="4" class="table-empty">로그�?불러?�는 중입?�다.</td></tr>
+                <tr><td colspan="4" class="table-empty">로그를 불러오는 중입니다.</td></tr>
               </tbody>
             </table>
           </div>
@@ -2024,48 +2024,48 @@ function renderAdminSection(body) {
     "item-db": `
       <div class="admin-section-grid">
         <article class="content-card">
-          <h3>?�이???�록</h3>
+          <h3>아이템 등록</h3>
           <form id="admin-item-form" class="stack-form compact-form">
-            <label><span>?�이???�름</span><input type="text" name="name" placeholder="?? 결투�? required /></label>
-            <label><span>?�이�??�모지</span><input type="text" name="icon" placeholder="?? ?��" value="?��" /></label>
-            <label><span>카테고리</span><input type="text" name="category" placeholder="?? ?�모?? /></label>
-            <label><span>짧�? ?�명</span><input type="text" name="shortLabel" placeholder="?�팁 ?�약" /></label>
-            <label><span>?�세 ?�명</span><textarea name="description" rows="4" placeholder="?�이???�명"></textarea></label>
-            <button type="submit" class="primary-button">?�이???�록</button>
+            <label><span>아이템 이름</span><input type="text" name="name" placeholder="예: 결투권" required /></label>
+            <label><span>아이콘 이모지</span><input type="text" name="icon" placeholder="예: 🎁" value="🎁" /></label>
+            <label><span>카테고리</span><input type="text" name="category" placeholder="예: 소모품" /></label>
+            <label><span>짧은 설명</span><input type="text" name="shortLabel" placeholder="툴팁 요약" /></label>
+            <label><span>상세 설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
+            <button type="submit" class="primary-button">아이템 등록</button>
           </form>
         </article>
         <article class="content-card">
-          <h3>?�록 미리보기</h3>
-          <p class="muted">지금�? ?�모지 ?�이콘을 ?�용?�고, ?�중???�트 ?��?지�??�결?????�게 ?�드�?분리???�었?�니??</p>
+          <h3>등록 미리보기</h3>
+          <p class="muted">지금은 이모지 아이콘을 사용하고, 나중에 도트 이미지를 연결할 수 있게 필드를 분리해 두었습니다.</p>
         </article>
       </div>
     `,
     notice: `
       <div class="admin-section-grid">
         <article class="content-card">
-          <h3>공�? ?�성</h3>
+          <h3>공지 작성</h3>
           <form id="announcement-form" class="stack-form compact-form">
-            <label><span>공�? ?�목</span><input type="text" name="title" placeholder="공�? ?�목" required /></label>
-            <label><span>공�? ?�용</span><textarea name="body" rows="6" placeholder="?�기�??�르�??��?별로 1?�만 ?�라지??공�?" required></textarea></label>
-            <button type="submit" class="primary-button">공�? ?�록</button>
+            <label><span>공지 제목</span><input type="text" name="title" placeholder="공지 제목" required /></label>
+            <label><span>공지 내용</span><textarea name="body" rows="6" placeholder="닫기를 누르면 유저별로 1회만 사라지는 공지" required></textarea></label>
+            <button type="submit" class="primary-button">공지 등록</button>
           </form>
         </article>
         <article class="content-card">
           <div class="admin-log-head">
-            <h3>공�? 로그</h3>
+            <h3>공지 로그</h3>
             <div class="admin-log-pager">
-              <button type="button" class="ghost-button compact-button" data-log-page="notice-prev">?�전</button>
-              <span id="notice-log-page-label" class="muted">1 ?�이지</span>
-              <button type="button" class="ghost-button compact-button" data-log-page="notice-next">?�음</button>
+              <button type="button" class="ghost-button compact-button" data-log-page="notice-prev">이전</button>
+              <span id="notice-log-page-label" class="muted">1 페이지</span>
+              <button type="button" class="ghost-button compact-button" data-log-page="notice-next">다음</button>
             </div>
           </div>
           <div class="table-wrap">
             <table class="log-table">
               <thead>
-                <tr><th>?�각</th><th>?�목</th><th>?�성??/th></tr>
+                <tr><th>시각</th><th>제목</th><th>작성자</th></tr>
               </thead>
               <tbody id="notice-log-body">
-                <tr><td colspan="3" class="table-empty">로그�?불러?�는 중입?�다.</td></tr>
+                <tr><td colspan="3" class="table-empty">로그를 불러오는 중입니다.</td></tr>
               </tbody>
             </table>
           </div>
@@ -2075,10 +2075,10 @@ function renderAdminSection(body) {
     account: `
       <div class="admin-section-grid">
         <article class="content-card">
-          <h3>계정 ??��</h3>
+          <h3>계정 삭제</h3>
           <form id="admin-delete-form" class="stack-form compact-form">
-            <label><span>??�� ?�??캐릭?�명</span><input type="text" name="characterName" placeholder="캐릭?�명" required /></label>
-            <button type="submit" class="ghost-button danger-button">계정 ??��</button>
+            <label><span>삭제 대상 캐릭터명</span><input type="text" name="characterName" placeholder="캐릭터명" required /></label>
+            <button type="submit" class="ghost-button danger-button">계정 삭제</button>
           </form>
         </article>
       </div>
@@ -2115,7 +2115,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
     addItemButton?.addEventListener("click", () => {
       const selectedId = String(itemSelect?.value || "").trim();
       if (!selectedId) {
-        onToast("지급할 ?�이?�을 먼�? ?�택??주세??", true);
+        onToast("지급할 아이템을 먼저 선택해 주세요.", true);
         return;
       }
       pendingAdminItemIds.push(selectedId);
@@ -2134,7 +2134,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
       const hasItems = pendingAdminItemIds.length > 0;
 
       if (!hasCurrencyDelta && !hasTraitDelta && !hasRoleChange && !hasItems) {
-        onToast("?�용??변�??�항???�습?�다.", true);
+        onToast("적용할 변경 사항이 없습니다.", true);
         return;
       }
 
@@ -2154,7 +2154,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         renderAdminItemQueue();
         await onProfilePatched();
         await renderAdminLogTable("operate");
-        onToast("?��? 조정???�용?�습?�다.");
+        onToast("유저 조정을 적용했습니다.");
       } catch (error) {
         onToast(error.message, true);
       }
@@ -2170,7 +2170,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         await withPendingToast(onToast, () => createItemDefinition(payload));
         itemForm.reset();
         await hydrateAdminItemOptions();
-        onToast("?�이??DB?????�이?�을 추�??�습?�다.");
+        onToast("아이템 DB에 새 아이템을 추가했습니다.");
       } catch (error) {
         onToast(error.message, true);
       }
@@ -2187,7 +2187,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         announcementForm.reset();
         adminLogPages.notice = 0;
         await renderAdminLogTable("notice");
-        onToast("공�?�??�록?�습?�다.");
+        onToast("공지를 등록했습니다.");
       } catch (error) {
         onToast(error.message, true);
       }
@@ -2199,12 +2199,12 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(deleteForm).entries());
 
-      if (!window.confirm(`${payload.characterName} 계정????��?�까??`)) return;
+      if (!window.confirm(`${payload.characterName} 계정을 삭제할까요?`)) return;
 
       try {
         await withPendingToast(onToast, () => adminDeleteUser(payload.characterName));
         deleteForm.reset();
-        onToast("계정????��?�습?�다.");
+        onToast("계정을 삭제했습니다.");
       } catch (error) {
         onToast(error.message, true);
       }
@@ -2260,7 +2260,7 @@ function ensureAnnouncementModal() {
       <div class="modal-head">
         <div>
           <p class="eyebrow">NOTICE</p>
-          <h2 id="announcement-modal-title">공�?</h2>
+          <h2 id="announcement-modal-title">공지</h2>
         </div>
         <button id="announcement-modal-close-icon" type="button" class="icon-button">x</button>
       </div>
@@ -2268,7 +2268,7 @@ function ensureAnnouncementModal() {
         <p id="announcement-modal-body"></p>
       </div>
       <div class="notice-modal-actions">
-        <button id="announcement-modal-close" type="button" class="primary-button">?�기</button>
+        <button id="announcement-modal-close" type="button" class="primary-button">닫기</button>
       </div>
     </div>
   `;
@@ -2290,7 +2290,7 @@ function showAnnouncementModal(announcement, { onProfilePatched, onToast }) {
   const closeIcon = document.querySelector("#announcement-modal-close-icon");
   if (!title || !body || !closeButton || !closeIcon) return;
 
-  title.textContent = announcement.title || "공�?";
+  title.textContent = announcement.title || "공지";
   body.textContent = announcement.body || "";
   modal.classList.remove("hidden");
 
@@ -2384,7 +2384,7 @@ async function renderAdminLogTable(kind) {
       pageSize: 5,
     });
 
-    label.textContent = `${result.page + 1} ?�이지`;
+    label.textContent = `${result.page + 1} 페이지`;
 
     if (!result.items.length) {
       if (adminLogPages[kind] > 0) {
@@ -2394,8 +2394,8 @@ async function renderAdminLogTable(kind) {
       }
       body.innerHTML =
         kind === "operate"
-          ? '<tr><td colspan="4" class="table-empty">로그가 ?�습?�다.</td></tr>'
-          : '<tr><td colspan="3" class="table-empty">로그가 ?�습?�다.</td></tr>';
+          ? '<tr><td colspan="4" class="table-empty">로그가 없습니다.</td></tr>'
+          : '<tr><td colspan="3" class="table-empty">로그가 없습니다.</td></tr>';
       return;
     }
 
@@ -2416,15 +2416,15 @@ async function renderAdminLogTable(kind) {
                 .join(", ")
             : "";
           const details = [
-            item.currencyDelta ? `?�화 ${Number(item.currencyDelta) > 0 ? "+" : ""}${Number(item.currencyDelta)}` : "",
-            item.traitPointDelta ? `?�인??${Number(item.traitPointDelta) > 0 ? "+" : ""}${Number(item.traitPointDelta)}` : "",
+            item.currencyDelta ? `재화 ${Number(item.currencyDelta) > 0 ? "+" : ""}${Number(item.currencyDelta)}` : "",
+            item.traitPointDelta ? `포인트 ${Number(item.traitPointDelta) > 0 ? "+" : ""}${Number(item.traitPointDelta)}` : "",
             itemSummary
-              ? `?�이??${escapeHtml(itemSummary)}`
+              ? `아이템 ${escapeHtml(itemSummary)}`
               : item.addItemName
-                ? `?�이??${escapeHtml(item.addItemName)}`
+                ? `아이템 ${escapeHtml(item.addItemName)}`
                 : "",
             item.setRole ? `권한 ${escapeHtml(item.setRole)}` : "",
-            item.applyToAllUsers ? "?�체 ?��? ?�?? : "",
+            item.applyToAllUsers ? "전체 유저 대상" : "",
           ]
             .filter(Boolean)
             .join(" / ");
@@ -2445,8 +2445,8 @@ async function renderAdminLogTable(kind) {
   } catch (_error) {
     body.innerHTML =
       kind === "operate"
-        ? '<tr><td colspan="4" class="table-empty">로그�?불러?��? 못했?�니??</td></tr>'
-        : '<tr><td colspan="3" class="table-empty">로그�?불러?��? 못했?�니??</td></tr>';
+        ? '<tr><td colspan="4" class="table-empty">로그를 불러오지 못했습니다.</td></tr>'
+        : '<tr><td colspan="3" class="table-empty">로그를 불러오지 못했습니다.</td></tr>';
   }
 }
 
@@ -2500,7 +2500,7 @@ async function hydrateMatchResultsPanel() {
     const nextButton = document.querySelector('[data-match-page="next"]');
 
     if (pageLabel) {
-      pageLabel.textContent = `${matchResultsPage + 1} ?�이지`;
+      pageLabel.textContent = `${matchResultsPage + 1} 페이지`;
     }
     if (prevButton) {
       prevButton.disabled = matchResultsPage === 0;
@@ -2515,7 +2515,7 @@ async function hydrateMatchResultsPanel() {
         await hydrateMatchResultsPanel();
         return;
       }
-      body.innerHTML = `<tr><td colspan="${emptyColspan}" class="table-empty">?��?결과가 ?�습?�다.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="${emptyColspan}" class="table-empty">대국 결과가 없습니다.</td></tr>`;
       return;
     }
 
@@ -2547,7 +2547,7 @@ async function hydrateMatchResultsPanel() {
       })
       .join("");
   } catch (_error) {
-    body.innerHTML = `<tr><td colspan="${emptyColspan}" class="table-empty">?��?결과�?불러?��? 못했?�니??</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${emptyColspan}" class="table-empty">대국 결과를 불러오지 못했습니다.</td></tr>`;
   }
 }
 
@@ -2598,15 +2598,15 @@ function buildParcelDisplayText(parcel) {
   if (Array.isArray(parcel.items) && parcel.items.length) {
     const itemNames = parcel.items.map((item) => item?.name).filter(Boolean);
     if (itemNames.length) {
-      parts.push(`?�이??${itemNames.join(", ")}`);
+      parts.push(`아이템 ${itemNames.join(", ")}`);
     }
   } else if (parcel.item?.name) {
-    parts.push(`?�이??${parcel.item.name}`);
+    parts.push(`아이템 ${parcel.item.name}`);
   }
   if (Number(parcel.currencyAmount || 0) > 0) {
-    parts.push(`?�화 ${Number(parcel.currencyAmount || 0)} G`);
+    parts.push(`재화 ${Number(parcel.currencyAmount || 0)} G`);
   }
-  return parts.join(" / ") || "?�용�??�음";
+  return parts.join(" / ") || "내용물 없음";
 }
 
 function buildRouletteLogId(date, characterName) {
@@ -2656,14 +2656,14 @@ async function loadImageFromFile(file) {
   const dataUrl = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("?��?지�??��? 못했?�니??"));
+    reader.onerror = () => reject(new Error("이미지를 읽지 못했습니다."));
     reader.readAsDataURL(file);
   });
 
   return await new Promise((resolve, reject) => {
     const target = new Image();
     target.onload = () => resolve(target);
-    target.onerror = () => reject(new Error("?��?지�?불러?��? 못했?�니??"));
+    target.onerror = () => reject(new Error("이미지를 불러오지 못했습니다."));
     target.src = dataUrl;
   });
 }
@@ -2675,7 +2675,7 @@ async function compressCanvas(sourceCanvas, maxSize = 240) {
   outputCanvas.height = Math.max(1, Math.round(sourceCanvas.height * ratio));
   const context = outputCanvas.getContext("2d");
   if (!context) {
-    throw new Error("?��?지 처리�??�작?��? 못했?�니??");
+    throw new Error("이미지 처리를 시작하지 못했습니다.");
   }
   context.drawImage(sourceCanvas, 0, 0, outputCanvas.width, outputCanvas.height);
   return outputCanvas.toDataURL("image/jpeg", 0.82);
@@ -2689,8 +2689,6 @@ function resetRoulettePanel() {
     wheel.classList.remove("spinning");
     wheel.style.removeProperty("--spin-rotation");
   }
-  if (result) result.textContent = "??��??추�??�면 ?�릴 ???�습?�다.";
+  if (result) result.textContent = "항목을 추가하면 돌릴 수 있습니다.";
   if (form) form.reset();
 }
-
-
