@@ -17,16 +17,6 @@ service cloud.firestore {
       allow update: if signedIn() &&
         resource.data.uid == request.auth.uid &&
         request.resource.data.uid == resource.data.uid &&
-        request.resource.data.loginId == resource.data.loginId &&
-        request.resource.data.nickname == resource.data.nickname &&
-        request.resource.data.characterName == resource.data.characterName &&
-        request.resource.data.role == resource.data.role &&
-        request.resource.data.rankingPoints == resource.data.rankingPoints &&
-        request.resource.data.selectedTraitIds == resource.data.selectedTraitIds &&
-        request.resource.data.availableTraitPoints == resource.data.availableTraitPoints &&
-        request.resource.data.inventory == resource.data.inventory &&
-        request.resource.data.currency == resource.data.currency &&
-        request.resource.data.createdAt == resource.data.createdAt &&
         request.resource.data.diff(resource.data).changedKeys().hasOnly(["dismissedAnnouncementIds", "updatedAt", "profileSealImage"]);
       allow delete: if false;
     }
