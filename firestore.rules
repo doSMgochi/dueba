@@ -6,7 +6,7 @@ service cloud.firestore {
     }
 
     match /users/{characterName} {
-      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow read: if signedIn();
       allow create: if signedIn() &&
         request.resource.data.uid == request.auth.uid &&
         characterName == request.resource.data.characterName &&
@@ -17,7 +17,7 @@ service cloud.firestore {
       allow update: if signedIn() &&
         resource.data.uid == request.auth.uid &&
         request.resource.data.uid == resource.data.uid &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(["dismissedAnnouncementIds", "updatedAt", "profileSealImage"]);
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(["dismissedAnnouncementIds", "updatedAt", "profileSealImage", "extraNicknames"]);
       allow delete: if false;
     }
 

@@ -266,10 +266,10 @@ input {
 }
 
 .notification-panel {
-  position: absolute;
+  position: fixed;
   top: calc(100% + 10px);
-  left: 0;
-  right: auto;
+  right: 0;
+  left: auto;
   z-index: 20;
   width: min(360px, calc(100vw - 32px));
   max-height: 520px;
@@ -481,14 +481,18 @@ input {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 128px;
-  margin-left: -64px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
   text-align: center;
   font-size: 14px;
   font-weight: 700;
   color: #ffffff;
   text-shadow: 0 1px 2px rgba(13, 40, 90, 0.35);
-  transform-origin: center center;
+  transform-origin: center 158px;
+  line-height: 1.2;
+  word-break: keep-all;
 }
 
 .wheel-placeholder {
@@ -617,8 +621,55 @@ input {
 
 .inventory-item {
   justify-content: center;
-  min-height: 82px;
-  padding: 10px;
+  min-height: 94px;
+  padding: 10px 10px 50px;
+  position: relative;
+}
+
+.inventory-use-button {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  transform: translateX(-50%);
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.92);
+  white-space: nowrap;
+}
+
+.inventory-use-button:hover,
+.inventory-use-button:focus-visible {
+  transform: translateX(-50%);
+}
+
+.member-profile-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 38px;
+}
+
+.member-profile-add-row {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.member-profile-add-wrap {
+  display: grid;
+  gap: 10px;
+}
+
+.text-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--navy);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.text-button:hover {
+  color: var(--orange);
 }
 
 .inventory-tooltip {
@@ -629,7 +680,7 @@ input {
   content: attr(data-tooltip);
   position: absolute;
   left: 50%;
-  bottom: calc(100% + 10px);
+  bottom: calc(100% + 14px);
   transform: translateX(-50%);
   width: min(240px, 80vw);
   padding: 10px 12px;
@@ -642,6 +693,7 @@ input {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease;
+  z-index: 12;
 }
 
 .inventory-tooltip:hover::after {
@@ -649,6 +701,7 @@ input {
 }
 
 .dot-slot {
+  position: relative;
   width: 54px;
   height: 54px;
   flex: 0 0 54px;
@@ -666,6 +719,66 @@ input {
   width: 100%;
   height: 150px;
   font-size: 48px;
+}
+
+.inventory-count-badge {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--orange);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 16px rgba(13, 40, 90, 0.18);
+}
+
+.shop-purchase-row {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+}
+
+.shop-quantity-field {
+  flex: 1;
+}
+
+.shop-quantity-field span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.shop-quantity-field input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgba(13, 40, 90, 0.14);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(13, 40, 90, 0.04));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  color: var(--navy);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.shop-quantity-field input:focus {
+  outline: none;
+  border-color: rgba(250, 95, 3, 0.48);
+  box-shadow: 0 0 0 4px rgba(250, 95, 3, 0.12);
+}
+
+[data-shop-purchase]:disabled,
+.shop-quantity-field input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .inventory-drag-ghost {
@@ -713,6 +826,14 @@ input {
   color: var(--navy);
   font-size: 12px;
   font-weight: 700;
+  border: 0;
+  cursor: pointer;
+  gap: 6px;
+}
+
+.parcel-selected-chip span {
+  font-size: 14px;
+  line-height: 1;
 }
 
 #parcel-clear-button {
@@ -967,6 +1088,10 @@ input {
   flex-wrap: wrap;
 }
 
+.admin-subtabs {
+  margin-bottom: 18px;
+}
+
 .admin-manage-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
@@ -1034,6 +1159,93 @@ input {
 
 .notice-modal-panel {
   width: min(580px, 100%);
+}
+
+.inventory-use-prompt-panel {
+  width: min(520px, 100%);
+}
+
+.inventory-use-confirm-panel {
+  width: min(460px, 100%);
+}
+
+.item-use-result-panel {
+  width: min(640px, 100%);
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.item-use-card {
+  position: relative;
+  overflow: hidden;
+  padding: 28px;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top right, rgba(250, 95, 3, 0.28), transparent 30%),
+    linear-gradient(145deg, #0d285a 0%, #15437d 48%, #2b9d7c 100%);
+  box-shadow: 0 28px 48px rgba(13, 40, 90, 0.28);
+  color: #ffffff;
+}
+
+.item-use-ribbons {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.item-use-ribbons span {
+  position: absolute;
+  width: 180px;
+  height: 10px;
+  background: linear-gradient(90deg, rgba(250, 95, 3, 0.88), rgba(255, 166, 92, 0.5));
+  transform: rotate(-24deg);
+  border-radius: 999px;
+}
+
+.item-use-ribbons span:nth-child(1) {
+  top: 48px;
+  right: -24px;
+}
+
+.item-use-ribbons span:nth-child(2) {
+  top: 94px;
+  right: 18px;
+}
+
+.item-use-ribbons span:nth-child(3) {
+  top: 140px;
+  right: 60px;
+}
+
+.item-use-head,
+.item-use-head .icon-button {
+  color: #ffffff;
+}
+
+.item-use-body {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.item-use-receipt {
+  padding: 18px 20px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.6;
+  backdrop-filter: blur(6px);
+}
+
+.item-use-effect {
+  padding: 18px 20px;
+  border-radius: 18px;
+  background: rgba(12, 24, 48, 0.28);
+  font-size: 15px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.92);
 }
 
 .profile-quick-modal-panel {
@@ -1284,6 +1496,11 @@ input {
 
   .roulette-wheel {
     width: min(420px, 92vw);
+  }
+
+  .shop-purchase-row {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }
 

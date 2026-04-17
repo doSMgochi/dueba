@@ -1,8 +1,11 @@
 import {
+  EmailAuthProvider,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   signInWithEmailAndPassword,
   signOut,
+  updatePassword,
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
 import {
   arrayUnion,
@@ -25,10 +28,13 @@ const getRankingBoardCallable = httpsCallable(functions, "getRankingBoard");
 const adminManageUserCallable = httpsCallable(functions, "adminManageUser");
 const adminDeleteUserCallable = httpsCallable(functions, "adminDeleteUser");
 const createItemDefinitionCallable = httpsCallable(functions, "createItemDefinition");
+const updateItemDefinitionCallable = httpsCallable(functions, "updateItemDefinition");
+const deleteItemDefinitionCallable = httpsCallable(functions, "deleteItemDefinition");
 const createAnnouncementCallable = httpsCallable(functions, "createAnnouncement");
 const purchaseShopItemCallable = httpsCallable(functions, "purchaseShopItem");
 const sendParcelCallable = httpsCallable(functions, "sendParcel");
 const respondParcelCallable = httpsCallable(functions, "respondParcel");
+const useInventoryItemCallable = httpsCallable(functions, "useInventoryItem");
 const listAdminLogsCallable = httpsCallable(functions, "listAdminLogs");
 const listBugReportsCallable = httpsCallable(functions, "listBugReports");
 
@@ -319,6 +325,24 @@ export async function createItemDefinition(payload) {
   }
 }
 
+export async function updateItemDefinition(payload) {
+  try {
+    const result = await updateItemDefinitionCallable(payload);
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function deleteItemDefinition(itemId) {
+  try {
+    const result = await deleteItemDefinitionCallable({ itemId });
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
 export async function createAnnouncement(payload) {
   try {
     const result = await createAnnouncementCallable(payload);
@@ -337,9 +361,9 @@ export async function listBugReports(payload) {
   }
 }
 
-export async function purchaseShopItem(shopItemId) {
+export async function purchaseShopItem(shopItemId, quantity = 1) {
   try {
-    const result = await purchaseShopItemCallable({ shopItemId });
+    const result = await purchaseShopItemCallable({ shopItemId, quantity });
     return result.data;
   } catch (error) {
     throw toFriendlyError(error);
@@ -398,6 +422,63 @@ export async function updateProfileSealImage(profileSealImage) {
   }
 }
 
+export async function updateMemberProfile({ extraNicknames = [] }) {
+  try {
+    if (!auth.currentUser) {
+      throw new Error("로그인한 유저가 없습니다.");
+    }
+
+    const profile = await findUserProfileByUid(auth.currentUser.uid);
+    if (!profile) {
+      throw new Error("유저 프로필을 찾지 못했습니다.");
+    }
+
+    const normalizedExtraNicknames = Array.isArray(extraNicknames)
+      ? extraNicknames.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+
+    await updateDoc(doc(db, "users", profile.id), {
+      extraNicknames: normalizedExtraNicknames,
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      docId: profile.id,
+      ...profile.data,
+      extraNicknames: normalizedExtraNicknames,
+    };
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function changeUserPassword(currentPassword, nextPassword) {
+  try {
+    if (!auth.currentUser || !auth.currentUser.email) {
+      throw new Error("로그인한 유저가 없습니다.");
+    }
+
+    const currentPasswordText = String(currentPassword || "").trim();
+    const nextPasswordText = String(nextPassword || "").trim();
+
+    if (!currentPasswordText || !nextPasswordText) {
+      throw new Error("현재 비밀번호와 새 비밀번호를 입력해 주세요.");
+    }
+
+    if (nextPasswordText.length < 8) {
+      throw new Error("새 비밀번호는 8자 이상이어야 합니다.");
+    }
+
+    const credential = EmailAuthProvider.credential(auth.currentUser.email, currentPasswordText);
+    await reauthenticateWithCredential(auth.currentUser, credential);
+    await updatePassword(auth.currentUser, nextPasswordText);
+
+    return { ok: true };
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
 export async function sendParcel(payload) {
   try {
     const result = await sendParcelCallable(payload);
@@ -410,6 +491,15 @@ export async function sendParcel(payload) {
 export async function respondParcel(parcelId, action) {
   try {
     const result = await respondParcelCallable({ parcelId, action });
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function useInventoryItem(itemKey, extraData = {}) {
+  try {
+    const result = await useInventoryItemCallable({ itemKey, extraData });
     return result.data;
   } catch (error) {
     throw toFriendlyError(error);

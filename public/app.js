@@ -60,6 +60,18 @@ signupForm.addEventListener("submit", async (event) => {
   }
 });
 
+document.addEventListener(
+  "wheel",
+  (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.type !== "number") return;
+    if (document.activeElement !== target) return;
+    event.preventDefault();
+  },
+  { passive: false }
+);
+
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const payload = Object.fromEntries(new FormData(loginForm).entries());

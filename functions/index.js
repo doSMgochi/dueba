@@ -324,7 +324,14 @@ exports.adminManageUser = onCall(async (request) => {
 exports.createItemDefinition = onCall(async (request) => {
   assertAuthenticated(request);
   await assertAdmin(request.auth.uid);
-  const { name = "", description = "", shortLabel = "", icon = "🎁", category = "기타" } = request.data || {};
+  const {
+    name = "",
+    description = "",
+    shortLabel = "",
+    icon = "🎁",
+    category = "기타",
+    price = 0,
+  } = request.data || {};
 
   const normalizedName = String(name || "").trim();
   if (!normalizedName) {
@@ -332,20 +339,136 @@ exports.createItemDefinition = onCall(async (request) => {
   }
 
   const itemId = buildItemId(normalizedName);
-  await db.collection("item-db").doc(itemId).set(
-    {
+  const normalizedPrice = Math.max(0, Number(price || 0));
+
+  await Promise.all([
+    db.collection("item-db").doc(itemId).set(
+      {
+        name: normalizedName,
+        description: String(description || "").trim(),
+        shortLabel: String(shortLabel || normalizedName).trim(),
+        icon: String(icon || "🎁").trim(),
+        category: String(category || "기타").trim(),
+        sortOrder: Date.now(),
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+    db.collection("shop").doc(itemId).set(
+      {
+        name: normalizedName,
+        description: String(description || "").trim(),
+        price: normalizedPrice,
+        sortOrder: Date.now(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ]);
+
+  return { ok: true, itemId };
+});
+
+exports.updateItemDefinition = onCall(async (request) => {
+  assertAuthenticated(request);
+  await assertAdmin(request.auth.uid);
+
+  const {
+    itemId = "",
+    name = "",
+    description = "",
+    shortLabel = "",
+    icon = "🎁",
+    category = "기타",
+    price = 0,
+  } = request.data || {};
+
+  const normalizedItemId = String(itemId || "").trim();
+  const normalizedName = String(name || "").trim();
+  if (!normalizedItemId || !normalizedName) {
+    throw new HttpsError("invalid-argument", "Item id and name are required.");
+  }
+
+  const itemRef = db.collection("item-db").doc(normalizedItemId);
+  const itemSnapshot = await itemRef.get();
+  if (!itemSnapshot.exists) {
+    throw new HttpsError("not-found", "Item definition was not found.");
+  }
+
+  const normalizedPrice = Math.max(0, Number(price || 0));
+  await Promise.all([
+    itemRef.update({
       name: normalizedName,
       description: String(description || "").trim(),
       shortLabel: String(shortLabel || normalizedName).trim(),
       icon: String(icon || "🎁").trim(),
       category: String(category || "기타").trim(),
-      sortOrder: Date.now(),
-      createdAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true }
+      updatedAt: FieldValue.serverTimestamp(),
+    }),
+    db.collection("shop").doc(normalizedItemId).set(
+      {
+        name: normalizedName,
+        description: String(description || "").trim(),
+        price: normalizedPrice,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ]);
+
+  const usersSnapshot = await db.collection("users").get();
+  await Promise.all(
+    usersSnapshot.docs.map(async (userDoc) => {
+      const data = userDoc.data();
+      const inventory = Array.isArray(data.inventory) ? [...data.inventory] : [];
+      let touched = false;
+
+      const nextInventory = inventory.map((inventoryItem) => {
+        if (String(inventoryItem?.itemId || "") !== normalizedItemId) {
+          return inventoryItem;
+        }
+
+        touched = true;
+        return {
+          ...inventoryItem,
+          name: normalizedName,
+          description: String(description || "").trim(),
+          shortLabel: String(shortLabel || normalizedName).trim(),
+          icon: String(icon || "🎁").trim(),
+          category: String(category || "기타").trim(),
+        };
+      });
+
+      if (!touched) {
+        return null;
+      }
+
+      return userDoc.ref.update({
+        inventory: nextInventory,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    })
   );
 
-  return { ok: true, itemId };
+  return { ok: true, itemId: normalizedItemId };
+});
+
+exports.deleteItemDefinition = onCall(async (request) => {
+  assertAuthenticated(request);
+  await assertAdmin(request.auth.uid);
+
+  const normalizedItemId = String(request.data?.itemId || "").trim();
+  if (!normalizedItemId) {
+    throw new HttpsError("invalid-argument", "Item id is required.");
+  }
+
+  await Promise.all([
+    db.collection("item-db").doc(normalizedItemId).delete(),
+    db.collection("shop").doc(normalizedItemId).delete(),
+  ]);
+
+  return { ok: true, itemId: normalizedItemId };
 });
 
 exports.purchaseShopItem = onCall(async (request) => {
@@ -353,6 +476,7 @@ exports.purchaseShopItem = onCall(async (request) => {
   await ensureGlobalGameData();
 
   const shopItemId = String(request.data?.shopItemId || "").trim();
+  const quantity = Math.max(1, Math.min(99, Number(request.data?.quantity || 1)));
   if (!shopItemId) {
     throw new HttpsError("invalid-argument", "Shop item id is required.");
   }
@@ -375,7 +499,8 @@ exports.purchaseShopItem = onCall(async (request) => {
   const userData = userSnapshot.data();
   const currentCurrency = Number(userData.currency || 0);
   const price = Number(shopItem.price || 0);
-  if (currentCurrency < price) {
+  const totalPrice = price * quantity;
+  if (currentCurrency < totalPrice) {
     throw new HttpsError("failed-precondition", `보유 재화가 부족합니다. 현재 ${currentCurrency} G만 보유 중입니다.`);
   }
 
@@ -391,15 +516,17 @@ exports.purchaseShopItem = onCall(async (request) => {
       };
 
   const inventory = Array.isArray(userData.inventory) ? [...userData.inventory] : [];
-  inventory.push(buildInventoryItemFromDefinition(itemDefinition));
+  Array.from({ length: quantity }).forEach(() => {
+    inventory.push(buildInventoryItemFromDefinition(itemDefinition));
+  });
 
   await userSnapshot.ref.update({
-    currency: currentCurrency - price,
+    currency: currentCurrency - totalPrice,
     inventory,
     updatedAt: FieldValue.serverTimestamp(),
   });
 
-  return { ok: true, shopItemId };
+  return { ok: true, shopItemId, quantity };
 });
 exports.adminDeleteUser = onCall(async (request) => {
   assertAuthenticated(request);
@@ -688,6 +815,76 @@ exports.respondParcel = onCall(async (request) => {
   return { ok: true, action };
 });
 
+exports.useInventoryItem = onCall(async (request) => {
+  assertAuthenticated(request);
+
+  const itemKey = String(request.data?.itemKey || "").trim();
+  const extraData =
+    request.data?.extraData && typeof request.data.extraData === "object"
+      ? request.data.extraData
+      : {};
+
+  if (!itemKey) {
+    throw new HttpsError("invalid-argument", "Item key is required.");
+  }
+
+  const userSnapshot = await findUserSnapshotByUid(request.auth.uid);
+  if (!userSnapshot) {
+    throw new HttpsError("not-found", "User profile was not found.");
+  }
+
+  const userData = userSnapshot.data();
+  const inventory = Array.isArray(userData.inventory) ? [...userData.inventory] : [];
+  const itemIndex = inventory.findIndex((item) => buildInventoryItemKey(item) === itemKey);
+  if (itemIndex === -1) {
+    throw new HttpsError("not-found", "Inventory item was not found.");
+  }
+
+  const usedItem = inventory[itemIndex];
+  const itemDefinitionSnapshot = usedItem.itemId
+    ? await db.collection("item-db").doc(String(usedItem.itemId)).get()
+    : null;
+  const itemDefinition = itemDefinitionSnapshot?.exists
+    ? { id: itemDefinitionSnapshot.id, ...itemDefinitionSnapshot.data() }
+    : null;
+  const useConfig =
+    itemDefinition?.useConfig && typeof itemDefinition.useConfig === "object"
+      ? itemDefinition.useConfig
+      : {};
+
+  if (Array.isArray(useConfig.requiredFields) && useConfig.requiredFields.length) {
+    const missingField = useConfig.requiredFields.find((field) => !String(extraData?.[field] || "").trim());
+    if (missingField) {
+      throw new HttpsError("invalid-argument", `추가 입력값 '${missingField}' 이 필요합니다.`);
+    }
+  }
+
+  inventory.splice(itemIndex, 1);
+  await userSnapshot.ref.update({
+    inventory,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  const receiptCode = `[${String(request.auth.uid || "UID").slice(0, 6).toUpperCase()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)
+    .toUpperCase()}]`;
+  const effectDescription = String(
+    itemDefinition?.useEffectDescription ||
+      itemDefinition?.description ||
+      usedItem.description ||
+      "아이템 효과 설명은 아직 등록되지 않았습니다."
+  ).trim();
+
+  return {
+    ok: true,
+    item: serialize(usedItem),
+    receiptCode,
+    effectDescription,
+    useConfig: serialize(useConfig),
+  };
+});
+
 exports.markNotificationRead = onCall(async (request) => {
   assertAuthenticated(request);
   const notificationId = String(request.data?.notificationId || "").trim();
@@ -945,9 +1142,9 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
     message:
       action === "accept"
         ? automatic
-          ? `${parcel.receiverCharacterName}?섏쓽 ?뚰룷媛 1??寃쎄낵濡??먮룞 ?섎졊?섏뿀?듬땲??`
-          : `${parcel.receiverCharacterName}?섏씠 ?뚰룷瑜??섎졊?덉뒿?덈떎.`
-        : `${parcel.receiverCharacterName}?섏씠 ?뚰룷瑜?嫄곗젅?덉뒿?덈떎.`,
+          ? `${parcel.receiverCharacterName}님의 소포가 1일 경과로 자동 수락되었습니다.`
+          : `${parcel.receiverCharacterName}님이 소포를 수락했습니다.`
+        : `${parcel.receiverCharacterName}님이 소포를 거절했습니다.`,
     payload: { parcelId, automatic: Boolean(automatic) },
   });
 
@@ -956,7 +1153,7 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
       targetUid: parcel.receiverUid,
       targetCharacterName: parcel.receiverCharacterName,
       type: "parcel-auto-accepted",
-      message: `${parcel.senderCharacterName}?섏쓽 ?뚰룷媛 1??寃쎄낵濡??먮룞 ?섎졊?섏뿀?듬땲??`,
+      message: `${parcel.senderCharacterName}님의 소포가 1일 경과로 자동 수락되었습니다.`,
       payload: { parcelId },
     });
   }
