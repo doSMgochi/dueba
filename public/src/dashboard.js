@@ -11,7 +11,12 @@
   setDoc,
   where,
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
-import { db } from "./firebase.js";
+import {
+  getDownloadURL,
+  ref as storageRef,
+  uploadString,
+} from "https://www.gstatic.com/firebasejs/12.7.0/firebase-storage.js";
+import { db, storage } from "./firebase.js";
 import {
   adminDeleteUser,
   adminManageUser,
@@ -26,7 +31,6 @@ import {
   purchaseShopItem,
   refreshCurrentUserProfile,
   respondParcel,
-  selectTrait,
   sendParcel,
   changeUserPassword,
   updateMemberProfile,
@@ -37,11 +41,13 @@ import {
 
 export const menuDefinitions = [
   { id: "ranking", label: "랭킹" },
-  { id: "match", label: "대국 정보" },
+  // 대국 정보 메뉴는 현재 미사용 상태라 임시 비활성화합니다.
+  // { id: "match", label: "대국 정보" },
   { id: "match-results", label: "대국 결과" },
-  { id: "traits", label: "특성치" },
+  // 특성치 시스템은 전체 개편 전까지 임시 비활성화합니다.
+  // { id: "traits", label: "특성치" },
   { id: "inventory", label: "인벤토리" },
-  { id: "shop", label: "자판기" },
+  { id: "shop", label: "상점" },
   { id: "roulette", label: "룰렛" },
   { id: "admin", label: "운영진 메뉴", adminOnly: true },
   { id: "bug-report", label: "버그 리포트" },
@@ -51,18 +57,18 @@ export const menuDefinitions = [
 
 const adminRoles = ["admin", "gm", "moderator"];
 const roulettePalette = [
-  "#0d285a",
-  "#153b7d",
-  "#fa5f03",
-  "#244f95",
-  "#1f6f78",
-  "#ff8a3d",
-  "#3f88c5",
-  "#1b998b",
-  "#e36414",
-  "#5c6bc0",
-  "#2a9d8f",
-  "#bc6c25",
+  "#57121a",
+  "#6c1820",
+  "#7f1d27",
+  "#93222d",
+  "#a32733",
+  "#b22d39",
+  "#432427",
+  "#553034",
+  "#6b3a3e",
+  "#7b1f2b",
+  "#8d2431",
+  "#a9323f",
 ];
 
 const sampleLiveMatches = [
@@ -93,7 +99,6 @@ let selectedParcelItemKeys = [];
 let bugReportPage = 0;
 const quickProfileCacheTtl = 60 * 1000;
 let rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
-let traitItemsCache = { data: null, fetchedAt: 0, promise: null };
 let activeAdminItemSection = "create";
 
 async function withPendingToast(onToast, task) {
@@ -128,36 +133,8 @@ async function getCachedRankingBoard(forceRefresh = false) {
   return rankingBoardCache.promise;
 }
 
-async function getCachedTraits(forceRefresh = false) {
-  const now = Date.now();
-  if (!forceRefresh && traitItemsCache.data && now - traitItemsCache.fetchedAt < quickProfileCacheTtl) {
-    return traitItemsCache.data;
-  }
-
-  if (traitItemsCache.promise) {
-    return traitItemsCache.promise;
-  }
-
-  traitItemsCache.promise = fetchCollectionItems("traits", "sortOrder")
-    .then((data) => {
-      traitItemsCache = {
-        data: Array.isArray(data) ? data : [],
-        fetchedAt: Date.now(),
-        promise: null,
-      };
-      return traitItemsCache.data;
-    })
-    .catch((error) => {
-      traitItemsCache.promise = null;
-      throw error;
-    });
-
-  return traitItemsCache.promise;
-}
-
 function invalidateQuickProfileCaches() {
   rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
-  traitItemsCache = { data: null, fetchedAt: 0, promise: null };
 }
 
 export function buildDashboard({
@@ -176,9 +153,9 @@ export function buildDashboard({
   document.querySelector("#welcome-title").textContent = `${profile.characterName}님 환영합니다`;
   document.querySelector("#profile-summary").textContent = `${profile.nickname} | ID ${profile.loginId}`;
   document.querySelector("#role-badge").textContent = profile.role;
-  document.querySelector("#currency-value").textContent = `${Number(profile.currency || 0)} G`;
+  document.querySelector("#currency-value").textContent = `${Number(profile.currency || 0)} 환`;
   document.querySelector("#inventory-count").textContent = String(profile.inventory?.length || 0);
-  document.querySelector("#stat-points").textContent = String(profile.availableTraitPoints || 0);
+  document.querySelector("#stat-points").textContent = String(profile.rankingPoints || 0);
 
   menuTabs.innerHTML = visibleMenus
     .map((menu) => {
@@ -211,7 +188,7 @@ export function buildDashboard({
     void hydrateRoulettePanel(profile);
   }
   if (safeActiveMenuId === "match-results") void hydrateMatchResultsPanel();
-  if (safeActiveMenuId === "traits") void hydrateTraitPanel({ profile, onProfilePatched, onToast });
+  // if (safeActiveMenuId === "traits") void hydrateTraitPanel({ profile, onProfilePatched, onToast });
   if (safeActiveMenuId === "admin") hydrateAdminPanel({ onProfilePatched, onToast });
 
   void syncAnnouncementModal({ profile, onProfilePatched, onToast });
@@ -272,8 +249,8 @@ function renderMenuContent(menuId, profile) {
                 <th>캐릭터명</th>
                 <th>작혼 닉네임</th>
                 <th>랭킹전 포인트</th>
-                <th>보유 재화</th>
-                <th>총 특성치 포인트</th>
+                <th>보유 환</th>
+                <th>보유 아이템 종류</th>
               </tr>
             </thead>
             <tbody id="ranking-table-body">
@@ -286,7 +263,7 @@ function renderMenuContent(menuId, profile) {
     shop: `
       <div id="shop-grid" class="content-grid three">
         <article class="content-card full">
-          <p class="muted">자판기 정보를 불러오는 중입니다.</p>
+          <p class="muted">상점 정보를 불러오는 중입니다.</p>
         </article>
       </div>
     `,
@@ -304,10 +281,18 @@ function renderMenuContent(menuId, profile) {
           <form id="bug-report-form" class="stack-form compact-form">
             <label><span>제목</span><input type="text" name="title" placeholder="간단한 제목" required /></label>
             <label><span>내용</span><textarea name="body" rows="6" placeholder="재현 방법이나 증상을 적어주세요." required></textarea></label>
+            <label>
+              <span>스크린샷 첨부</span>
+              <input type="file" name="screenshots" accept="image/*" multiple />
+              <small class="muted">최대 5장까지 첨부할 수 있습니다.</small>
+            </label>
+            <div id="bug-report-preview" class="bug-report-preview-list">
+              <p class="muted">첨부된 스크린샷이 없습니다.</p>
+            </div>
             <button type="submit" class="primary-button">리포트 등록</button>
           </form>
         </article>
-        <article class="content-card ${adminRoles.includes(profile.role) ? "" : "hidden"}">
+        <article class="content-card bug-report-admin-card ${adminRoles.includes(profile.role) ? "" : "hidden"}">
           <div class="admin-log-head">
             <h3>접수된 리포트</h3>
             <div class="admin-log-pager">
@@ -317,9 +302,14 @@ function renderMenuContent(menuId, profile) {
             </div>
           </div>
           <div class="table-wrap">
-            <table class="log-table">
-              <thead><tr><th>시각</th><th>작성자</th><th>제목</th><th>내용</th></tr></thead>
-              <tbody id="bug-report-body"><tr><td colspan="4" class="table-empty">버그 리포트를 불러오는 중입니다.</td></tr></tbody>
+            <table class="log-table bug-report-table">
+              <colgroup>
+                <col class="bug-report-col-title" />
+                <col class="bug-report-col-writer" />
+                <col class="bug-report-col-date" />
+              </colgroup>
+              <thead><tr><th>제목</th><th>작성자</th><th>날짜</th></tr></thead>
+              <tbody id="bug-report-body"><tr><td colspan="3" class="table-empty">버그 리포트를 불러오는 중입니다.</td></tr></tbody>
             </table>
           </div>
         </article>
@@ -345,7 +335,7 @@ function renderMenuContent(menuId, profile) {
                 <button id="parcel-clear-button" type="button" class="ghost-button compact-button">전체 선택 해제</button>
               </div>
             </div>
-            <label><span>보낼 재화</span><input type="number" min="0" name="currencyAmount" placeholder="0" /></label>
+            <label><span>보낼 환</span><input type="number" min="0" name="currencyAmount" placeholder="0" /></label>
             <label class="inline-check parcel-wrap-check">
               <input type="checkbox" name="useWrapping" />
               <span class="check-indicator" aria-hidden="true"></span>
@@ -420,10 +410,10 @@ function renderMenuContent(menuId, profile) {
         ${liveMatchCards}
         <article class="content-card">
           <h3>확장 메모</h3>
-          <p>나중에 크롤링 데이터에서 대국중인 항목을 찾고, 그 안의 작혼 닉네임을 캐릭터와 연결해 현재 대국중인 특성치를 hover 정보로 보여주는 구조를 염두에 둔 화면입니다.</p>
+          <p>나중에 크롤링 데이터에서 대국중인 항목을 찾고, 그 안의 작혼 닉네임을 캐릭터와 연결해 현재 대국중인 캐릭터 정보를 hover로 보여주는 구조를 염두에 둔 화면입니다.</p>
           <div class="schema-box">
             <strong>추천 컬렉션 구조</strong>
-            <p><code>live-matches</code>에 제목, 상태, 플레이어 목록, 작혼 닉네임, 캐릭터명, 특성치 요약을 저장하는 방식이 확장에 유리합니다.</p>
+            <p><code>live-matches</code>에 제목, 상태, 플레이어 목록, 작혼 닉네임, 캐릭터명, 대국 메모를 저장하는 방식이 확장에 유리합니다.</p>
           </div>
         </article>
       </div>
@@ -432,10 +422,8 @@ function renderMenuContent(menuId, profile) {
       <article class="content-card full">
         <div class="result-mode-tabs">
           <div class="admin-section-tabs">
-            <button type="button" class="tab-button ${activeResultMode === "ranked-4p-hanchan" ? "active" : ""}" data-result-mode="ranked-4p-hanchan">랭킹전 4인 반장전</button>
-            <button type="button" class="tab-button ${activeResultMode === "ranked-3p-hanchan" ? "active" : ""}" data-result-mode="ranked-3p-hanchan">랭킹전 3인 반장전</button>
-            <button type="button" class="tab-button ${activeResultMode === "normal-4p-hanchan" ? "active" : ""}" data-result-mode="normal-4p-hanchan">일반전 4인 반장전</button>
-            <button type="button" class="tab-button ${activeResultMode === "normal-3p-hanchan" ? "active" : ""}" data-result-mode="normal-3p-hanchan">일반전 3인 반장전</button>
+            <button type="button" class="tab-button ${activeResultMode === "ranked-4p-hanchan" ? "active" : ""}" data-result-mode="ranked-4p-hanchan">4인 반장전</button>
+            <button type="button" class="tab-button ${activeResultMode === "ranked-3p-hanchan" ? "active" : ""}" data-result-mode="ranked-3p-hanchan">3인 반장전</button>
           </div>
         </div>
         <div class="table-wrap">
@@ -470,23 +458,16 @@ function renderMenuContent(menuId, profile) {
         </div>
       </article>
     `,
-    traits: `
-      <article class="content-card full">
-        <div class="trait-header">
-          <div>
-            <h3>특성치</h3>
-            <p>한 특성치는 한 번만 찍을 수 있습니다. 성공 보너스, 실패 패널티, 필요 포인트를 표로 빠르게 확인할 수 있습니다.</p>
-          </div>
-          <strong class="trait-point-badge">남은 포인트 ${Number(profile.availableTraitPoints || 0)}</strong>
-        </div>
-        <div class="table-wrap">
-          <table class="log-table trait-table">
-            <thead><tr><th>특성명</th><th>성공+</th><th>실패-</th><th>필요P</th><th>상태</th><th>구매</th></tr></thead>
-            <tbody id="trait-table-body"><tr><td colspan="6" class="table-empty">특성치를 불러오는 중입니다.</td></tr></tbody>
-          </table>
-        </div>
-      </article>
-    `,
+    // traits: `
+    //   <article class="content-card full">
+    //     <div class="trait-header">
+    //       <div>
+    //         <h3>특성치</h3>
+    //         <p>특성치 시스템 개편 중입니다.</p>
+    //       </div>
+    //     </div>
+    //   </article>
+    // `,
     admin: `
       <article class="content-card full">
         <div class="admin-shell">
@@ -517,7 +498,7 @@ async function hydrateShopPanel({ onProfilePatched, onToast }) {
     const itemDbMap = new Map(itemDbItems.map((item) => [item.id, item]));
 
     if (!shopItems.length) {
-      shopGrid.innerHTML = '<article class="content-card full"><p class="muted">자판기에 등록된 아이템이 없습니다.</p></article>';
+      shopGrid.innerHTML = '<article class="content-card full"><p class="muted">상점에 등록된 아이템이 없습니다.</p></article>';
       return;
     }
 
@@ -531,7 +512,7 @@ async function hydrateShopPanel({ onProfilePatched, onToast }) {
             <div class="content-meta">
               <h3>${escapeHtml(item.name || "이름 없음")}</h3>
               <p>${escapeHtml(item.description || "설명 없음")}</p>
-              <strong>${Number(item.price || 0)} G</strong>
+              <strong>${Number(item.price || 0)} 환</strong>
             </div>
             <div class="shop-purchase-row">
               <label class="shop-quantity-field">
@@ -565,7 +546,7 @@ async function hydrateShopPanel({ onProfilePatched, onToast }) {
       });
     });
   } catch (_error) {
-    shopGrid.innerHTML = '<article class="content-card full"><p class="muted">자판기 정보를 불러오지 못했습니다.</p></article>';
+    shopGrid.innerHTML = '<article class="content-card full"><p class="muted">상점 정보를 불러오지 못했습니다.</p></article>';
   }
 }
 
@@ -604,9 +585,57 @@ async function hydrateBugReportPanel(profile, onToast) {
   const form = document.querySelector("#bug-report-form");
   if (form && !form.dataset.bound) {
     form.dataset.bound = "true";
+    const screenshotInput = form.querySelector('input[name="screenshots"]');
+    const preview = document.querySelector("#bug-report-preview");
+    let selectedScreenshotFiles = [];
+
+    const renderScreenshotPreview = () => {
+      if (!preview) return;
+      if (!selectedScreenshotFiles.length) {
+        preview.innerHTML = '<p class="muted">첨부된 스크린샷이 없습니다.</p>';
+        return;
+      }
+
+      preview.innerHTML = selectedScreenshotFiles
+        .map((file, index) => {
+          const objectUrl = URL.createObjectURL(file);
+          return `
+            <article class="bug-report-preview-card">
+              <img src="${objectUrl}" alt="스크린샷 미리보기" class="bug-report-preview-image" data-bug-report-object-url="${objectUrl}" />
+              <button type="button" class="bug-report-preview-remove" data-bug-report-remove="${index}">x</button>
+              <strong>${escapeHtml(file.name || `첨부 ${index + 1}`)}</strong>
+            </article>
+          `;
+        })
+        .join("");
+
+      preview.querySelectorAll("[data-bug-report-remove]").forEach((button) => {
+        button.onclick = () => {
+          const index = Number(button.dataset.bugReportRemove);
+          if (Number.isNaN(index)) return;
+          selectedScreenshotFiles.splice(index, 1);
+          renderScreenshotPreview();
+        };
+      });
+    };
+
+    screenshotInput?.addEventListener("change", () => {
+      const nextFiles = Array.from(screenshotInput.files || []).filter((file) => file.type.startsWith("image/"));
+      const combinedFiles = [...selectedScreenshotFiles, ...nextFiles];
+      if (combinedFiles.length > 5) {
+        onToast?.("스크린샷은 최대 5장까지 첨부할 수 있습니다.", true);
+      }
+      selectedScreenshotFiles = combinedFiles.slice(0, 5);
+      if (screenshotInput) {
+        screenshotInput.value = "";
+      }
+      renderScreenshotPreview();
+    });
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const payload = Object.fromEntries(new FormData(form).entries());
+      const formData = new FormData(form);
+      const payload = Object.fromEntries(formData.entries());
       const title = String(payload.title || "").trim();
       const body = String(payload.body || "").trim();
 
@@ -614,16 +643,27 @@ async function hydrateBugReportPanel(profile, onToast) {
         return;
       }
 
+      const screenshotUrls = [];
       const reportId = buildReportLogId(new Date());
+      for (const [index, screenshotFile] of selectedScreenshotFiles.entries()) {
+        const screenshotDataUrl = await compressImageFile(screenshotFile, 960);
+        const screenshotRef = storageRef(storage, `bug-reports/${profile.uid}/${reportId}_${index + 1}.jpg`);
+        await uploadString(screenshotRef, screenshotDataUrl, "data_url");
+        screenshotUrls.push(await getDownloadURL(screenshotRef));
+      }
+
       await setDoc(doc(db, "report-logs", reportId), {
         uid: profile.uid,
         characterName: profile.characterName,
         title,
         body,
+        screenshotUrls,
         createdAt: serverTimestamp(),
         createdAtText: new Date().toLocaleString("ko-KR"),
       });
       form.reset();
+      selectedScreenshotFiles = [];
+      renderScreenshotPreview();
       onToast?.("버그 리포트를 등록했습니다.");
     });
   }
@@ -646,14 +686,59 @@ async function renderBugReports() {
 
     label.textContent = `${result.page + 1} 페이지`;
     if (!result.items.length) {
-      body.innerHTML = '<tr><td colspan="4" class="table-empty">접수된 버그 리포트가 없습니다.</td></tr>';
+      body.innerHTML = '<tr><td colspan="3" class="table-empty">접수된 버그 리포트가 없습니다.</td></tr>';
     } else {
       body.innerHTML = result.items
         .map((item) => {
           const createdLabel = formatMaybeTimestamp(item.createdAt) || item.createdAtText || "-";
-          return `<tr><td>${escapeHtml(createdLabel)}</td><td>${escapeHtml(item.characterName || "-")}</td><td>${escapeHtml(item.title || "-")}</td><td>${escapeHtml(item.body || "-")}</td></tr>`;
+          const detailRowId = `bug-report-detail-${escapeHtml(item.id || item.reportId || createdLabel)}`;
+          const screenshotList = Array.isArray(item.screenshotUrls) && item.screenshotUrls.length
+            ? item.screenshotUrls
+            : item.screenshotUrl
+              ? [item.screenshotUrl]
+              : [];
+          const screenshotHtml = screenshotList.length
+            ? `
+              <div class="bug-report-screenshot-grid">
+                ${screenshotList
+                  .map(
+                    (url) =>
+                      `<img src="${escapeHtml(url)}" alt="버그 리포트 첨부 이미지" class="bug-report-screenshot" />`
+                  )
+                  .join("")}
+              </div>
+            `
+            : '<p class="muted">첨부된 스크린샷이 없습니다.</p>';
+          return `
+            <tr>
+              <td>
+                <button type="button" class="text-button bug-report-toggle" data-bug-report-toggle="${detailRowId}">
+                  ${escapeHtml(item.title || "-")}
+                </button>
+              </td>
+              <td>${escapeHtml(item.characterName || "-")}</td>
+              <td>${escapeHtml(createdLabel)}</td>
+            </tr>
+            <tr id="${detailRowId}" class="bug-report-detail-row hidden">
+              <td colspan="3">
+                <div class="bug-report-detail">
+                  <p>${escapeHtml(item.body || "-")}</p>
+                  ${screenshotHtml}
+                </div>
+              </td>
+            </tr>
+          `;
         })
         .join("");
+
+      body.querySelectorAll("[data-bug-report-toggle]").forEach((button) => {
+        button.onclick = () => {
+          const targetId = button.dataset.bugReportToggle;
+          const detailRow = body.querySelector(`#${CSS.escape(targetId)}`);
+          if (!detailRow) return;
+          detailRow.classList.toggle("hidden");
+        };
+      });
     }
 
     const prevButton = document.querySelector('[data-report-page="prev"]');
@@ -675,7 +760,7 @@ async function renderBugReports() {
       };
     }
   } catch (_error) {
-    body.innerHTML = '<tr><td colspan="4" class="table-empty">버그 리포트를 불러오지 못했습니다.</td></tr>';
+    body.innerHTML = '<tr><td colspan="3" class="table-empty">버그 리포트를 불러오지 못했습니다.</td></tr>';
   }
 }
 
@@ -792,10 +877,7 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
   modal.classList.remove("hidden");
   content.innerHTML = '<div class="panel empty-state">간단 프로필을 불러오는 중입니다.</div>';
 
-  const [rankings, traits] = await Promise.all([
-    getCachedRankingBoard().catch(() => []),
-    getCachedTraits().catch(() => []),
-  ]);
+  const rankings = await getCachedRankingBoard().catch(() => []);
   const normalizedRankings = buildDisplayRankings(rankings);
   const rankEntry = normalizedRankings.find(
     (item) =>
@@ -803,26 +885,33 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
       item.characterName === profile.characterName ||
       item.nickname === profile.nickname
   );
-  const selectedTraitIds = Array.isArray(profile.selectedTraitIds) ? profile.selectedTraitIds : [];
-  const traitMap = new Map(traits.map((item) => [item.id, item.name || item.id]));
   const isOwnProfile = viewerProfile?.uid && viewerProfile.uid === profile.uid;
-  const hasHiddenTrait = selectedTraitIds.includes("hidden-trait");
-  const traitNames = selectedTraitIds.map((traitId) => traitMap.get(traitId) || traitId).filter(Boolean);
-  const usedTraitPoints = traits
-    .filter((item) => selectedTraitIds.includes(item.id))
-    .reduce((sum, item) => sum + Number(item.requiredPoints || 0), 0);
-  const totalTraitPoints = Number(profile.availableTraitPoints || 0) + usedTraitPoints;
   const nicknameList = [profile.nickname, ...(Array.isArray(profile.extraNicknames) ? profile.extraNicknames : [])]
     .map((item) => String(item || "").trim())
     .filter(Boolean);
-  const traitSummary = !isOwnProfile && hasHiddenTrait
-    ? "비공개 된 특성입니다."
-    : traitNames.length
-      ? traitNames.join(", ")
-      : "없음";
+  const inventoryKinds = buildGroupedInventoryItems(profile.inventory || []);
+  const inventorySummary = inventoryKinds.length
+    ? inventoryKinds
+        .map(({ item, count }) => {
+          const icon = escapeHtml(item.icon || "🎁");
+          const tooltip = escapeHtml(
+            `${item.name || "이름 없는 아이템"} | ${item.description || "설명이 아직 등록되지 않았습니다."}`
+          );
+          return `
+            <div class="profile-item-chip inventory-tooltip" data-tooltip="${tooltip}">
+              <span class="profile-item-icon">${icon}</span>
+              ${count > 1 ? `<span class="profile-item-count">x${count}</span>` : ""}
+            </div>
+          `;
+        })
+        .join("")
+    : '<span class="profile-item-empty">없음</span>';
 
   content.innerHTML = `
     <div class="profile-lobby-card">
+      <div class="profile-lobby-glow profile-lobby-glow-a" aria-hidden="true"></div>
+      <div class="profile-lobby-glow profile-lobby-glow-b" aria-hidden="true"></div>
+      <div class="profile-lobby-gridlines" aria-hidden="true"></div>
       <div class="profile-lobby-visual">
         <div class="profile-seal-panel">
           ${
@@ -840,22 +929,19 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
           <div><span>현재 랭킹 순위</span><strong>${rankEntry?.displayRank ? `${rankEntry.displayRank}위` : "-"}</strong></div>
           <div><span>랭킹전 포인트</span><strong>${Number(profile.rankingPoints || 0)}</strong></div>
           <div><span>총 대국 수</span><strong>${Number(profile.totalMatches || 0)}</strong></div>
-          <div><span>보유 재화</span><strong>${Number(profile.currency || 0)} G</strong></div>
-          <div><span>총 스탯 포인트</span><strong>${totalTraitPoints}</strong></div>
+          <div><span>보유 환</span><strong>${Number(profile.currency || 0)} 환</strong></div>
+          <div><span>인벤토리 종류 수</span><strong>${inventoryKinds.length}</strong></div>
         </div>
         <div class="profile-lobby-traits">
-          <span>보유 특성치 종류</span>
-          <strong>${escapeHtml(traitSummary)}</strong>
+          <span>${isOwnProfile ? "보유 아이템 요약" : "공개 인벤토리 요약"}</span>
+          <div class="profile-item-summary">${inventorySummary}</div>
         </div>
-      </div>
-      <div class="profile-lobby-stripes" aria-hidden="true">
-        <span></span><span></span><span></span>
       </div>
     </div>
   `;
 
   sealButton.classList.toggle("hidden", !isOwnProfile);
-  fileInput.classList.toggle("hidden", !isOwnProfile);
+  fileInput.classList.add("hidden");
   sealButton.onclick = () => fileInput.click();
   fileInput.onchange = async (event) => {
     const file = event.target.files?.[0];
@@ -944,7 +1030,7 @@ async function openProfileSealCropModal(file) {
 
   const redraw = () => {
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = "#0d285a";
+    context.fillStyle = "#1c1c1f";
     context.fillRect(0, 0, canvas.width, canvas.height);
 
     const cropBase = Math.min(image.width, image.height);
@@ -1177,8 +1263,8 @@ async function hydrateRankingPanel() {
             <td><button type="button" class="text-button ranking-profile-button" data-ranking-character="${escapeHtml(item.characterName || "")}">${escapeHtml(item.characterName || "-")}</button></td>
             <td>${escapeHtml(item.nickname || "-")}</td>
             <td>${Number(item.rankingPoints || 0)}</td>
-            <td>${Number(item.currency || 0)} G</td>
-            <td>${Number(item.totalTraitPoints || 0)}</td>
+            <td>${Number(item.currency || 0)} 환</td>
+            <td>${Number(item.inventoryTypeCount || 0)}</td>
           </tr>
         `;
       })
@@ -1812,8 +1898,8 @@ async function renderIncomingParcels({ profile, onProfilePatched, onToast }) {
         const data = parcelDoc.data();
         const itemLabel = escapeHtml(buildParcelDisplayText(data));
         const currencyLabel = Number(data.currencyAmount || 0)
-          ? `재화 ${Number(data.currencyAmount || 0)} G`
-          : "재화 없음";
+          ? `환 ${Number(data.currencyAmount || 0)}`
+          : "환 없음";
         return `
           <article class="info-card">
             <div class="info-card-head">
@@ -1882,8 +1968,8 @@ async function renderOutgoingParcels({ profile }) {
         const data = parcelDoc.data();
         const itemLabel = escapeHtml(buildParcelDisplayText(data));
         const currencyLabel = Number(data.currencyAmount || 0)
-          ? `재화 ${Number(data.currencyAmount || 0)} G`
-          : "재화 없음";
+          ? `환 ${Number(data.currencyAmount || 0)}`
+          : "환 없음";
         return `
           <article class="info-card">
             <div class="info-card-head">
@@ -1901,71 +1987,9 @@ async function renderOutgoingParcels({ profile }) {
   }
 }
 
-async function hydrateTraitPanel({ profile, onProfilePatched, onToast }) {
-  const traitTableBody = document.querySelector("#trait-table-body");
-  if (!traitTableBody) return;
-
-  try {
-    const traitItems = await fetchCollectionItems("traits", "sortOrder");
-
-    if (!traitItems.length) {
-      traitTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">traits 컬렉션에 특성치가 없습니다.</td></tr>';
-      return;
-    }
-
-    const selectedTraitIds = new Set(profile.selectedTraitIds || []);
-    const currentPoints = Number(profile.availableTraitPoints || 0);
-    const sortedTraitItems = [...traitItems].sort((left, right) => {
-      const leftOwned = selectedTraitIds.has(left.id) ? 0 : 1;
-      const rightOwned = selectedTraitIds.has(right.id) ? 0 : 1;
-      if (leftOwned !== rightOwned) {
-        return leftOwned - rightOwned;
-      }
-      return Number(left.sortOrder || 0) - Number(right.sortOrder || 0);
-    });
-
-    traitTableBody.innerHTML = sortedTraitItems
-      .map((trait) => {
-        const isSelected = selectedTraitIds.has(trait.id);
-        const requiredPoints = Number(trait.requiredPoints || 0);
-        const isLocked = !isSelected && currentPoints < requiredPoints;
-        const statusLabel = isSelected ? "사용 중" : isLocked ? "포인트 부족" : "구매 가능";
-        return `
-          <tr>
-            <td>${escapeHtml(trait.name || trait.id)}</td>
-            <td>+${Number(trait.successPoints || 0)}</td>
-            <td>-${Number(trait.failPoints || 0)}</td>
-            <td>${requiredPoints}</td>
-            <td>${statusLabel}</td>
-            <td>
-              <button type="button" class="ghost-button compact-button ${isSelected ? "is-owned" : ""}" data-trait-id="${trait.id}" ${isSelected || isLocked ? "disabled" : ""}>
-                ${isSelected ? "구매 완료" : "구매"}
-              </button>
-            </td>
-          </tr>
-        `;
-      })
-      .join("");
-
-    traitTableBody.querySelectorAll("[data-trait-id]").forEach((button) => {
-      button.addEventListener("click", async () => {
-        button.disabled = true;
-        try {
-          const updatedProfile = await withPendingToast(onToast, () =>
-            selectTrait(button.dataset.traitId)
-          );
-          await onProfilePatched(updatedProfile);
-          onToast("특성치를 구매했습니다.");
-        } catch (error) {
-          onToast(error.message, true);
-          button.disabled = false;
-        }
-      });
-    });
-  } catch (_error) {
-    traitTableBody.innerHTML = '<tr><td colspan="6" class="table-empty">특성치를 불러오지 못했습니다.</td></tr>';
-  }
-}
+// async function hydrateTraitPanel({ profile, onProfilePatched, onToast }) {
+//   특성치 시스템 개편 전까지 임시 비활성화
+// }
 
 function attachRouletteEvents({ profile, onToast }) {
   const form = document.querySelector("#roulette-item-form");
@@ -2218,8 +2242,8 @@ function renderAdminSection(body) {
               </label>
             </label>
             <label><span>대상 캐릭터명</span><input type="text" name="targetCharacterName" placeholder="캐릭터명" required /></label>
-            <label><span>재화 증감</span><input type="number" name="currencyDelta" value="0" /></label>
-            <label><span>특성치 포인트 증감</span><input type="number" name="traitPointDelta" value="0" /></label>
+            <label><span>환 증감</span><input type="number" name="currencyDelta" value="0" /></label>
+            <!-- 특성치 시스템은 개편 전까지 운영진 조정에서 제외 -->
             <label>
               <span>지급 아이템 선택</span>
               <select name="addItemId" id="admin-item-select">
@@ -2337,7 +2361,7 @@ function renderAdminItemSection() {
         <label><span>카테고리</span><input type="text" name="category" placeholder="예: 소모품" /></label>
         <label><span>짧은 설명</span><input type="text" name="shortLabel" placeholder="툴팁 요약" /></label>
         <label><span>상세 설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
-        <label><span>자판기 가격</span><input type="number" min="0" name="price" value="0" /></label>
+        <label><span>상점 가격</span><input type="number" min="0" name="price" value="0" /></label>
         <button type="submit" class="primary-button">아이템 등록</button>
       </form>
     `,
@@ -2354,7 +2378,7 @@ function renderAdminItemSection() {
         <label><span>카테고리</span><input type="text" name="category" placeholder="예: 소모품" /></label>
         <label><span>짧은 설명</span><input type="text" name="shortLabel" placeholder="툴팁 요약" /></label>
         <label><span>상세 설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
-        <label><span>자판기 가격</span><input type="number" min="0" name="price" value="0" /></label>
+        <label><span>상점 가격</span><input type="number" min="0" name="price" value="0" /></label>
         <button type="submit" class="primary-button">아이템 수정</button>
       </form>
     `,
@@ -2426,11 +2450,10 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(manageForm).entries());
       const hasCurrencyDelta = Number(payload.currencyDelta || 0) !== 0;
-      const hasTraitDelta = Number(payload.traitPointDelta || 0) !== 0;
       const hasRoleChange = String(payload.setRole || "").trim().length > 0;
       const hasItems = pendingAdminItemIds.length > 0;
 
-      if (!hasCurrencyDelta && !hasTraitDelta && !hasRoleChange && !hasItems) {
+      if (!hasCurrencyDelta && !hasRoleChange && !hasItems) {
         onToast("적용할 변경 사항이 없습니다.", true);
         return;
       }
@@ -2440,7 +2463,6 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
           adminManageUser({
             targetCharacterName: payload.targetCharacterName,
             currencyDelta: Number(payload.currencyDelta || 0),
-            traitPointDelta: Number(payload.traitPointDelta || 0),
             addItemIds: pendingAdminItemIds,
             setRole: payload.setRole,
             applyToAllUsers: payload.applyToAllUsers === "on",
@@ -2800,20 +2822,47 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
   }
 
   let pendingExtraNicknames = Array.isArray(profile.extraNicknames) ? [...profile.extraNicknames] : [];
+  form.reset();
   nicknameDisplay.value = String(profile.nickname || "");
   addWrap.classList.add("hidden");
   addInput.value = "";
+  currentPasswordInput.value = "";
+  nextPasswordInput.value = "";
+  nextPasswordConfirmInput.value = "";
 
   const renderExtraNicknames = () => {
     nicknameList.innerHTML = pendingExtraNicknames.length
-      ? pendingExtraNicknames.map((item) => `<span class="pill-badge">${escapeHtml(item)}</span>`).join("")
+      ? pendingExtraNicknames
+          .map(
+            (item, index) => `
+              <button type="button" class="pill-badge member-profile-chip" data-extra-remove="${index}">
+                <span>${escapeHtml(item)}</span>
+                <strong>x</strong>
+              </button>
+            `
+          )
+          .join("")
       : '<span class="muted">아직 추가된 닉네임이 없습니다.</span>';
+
+    nicknameList.querySelectorAll("[data-extra-remove]").forEach((button) => {
+      button.onclick = () => {
+        const index = Number(button.dataset.extraRemove);
+        if (Number.isNaN(index)) return;
+        pendingExtraNicknames.splice(index, 1);
+        renderExtraNicknames();
+      };
+    });
   };
 
   renderExtraNicknames();
   modal.classList.remove("hidden");
 
-  const close = () => modal.classList.add("hidden");
+  const close = () => {
+    form.reset();
+    addWrap.classList.add("hidden");
+    addInput.value = "";
+    modal.classList.add("hidden");
+  };
   closeButton.onclick = close;
   closeIcon.onclick = close;
 
@@ -2853,6 +2902,7 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
       }
 
       const updatedProfile = await updateMemberProfile({
+        nickname: payload.nickname,
         extraNicknames: pendingExtraNicknames,
       });
       close();
@@ -2884,7 +2934,7 @@ function ensureMemberProfileEditModal() {
       <form id="member-profile-edit-form" class="stack-form compact-form">
         <label>
           <span>대표 작혼 닉네임</span>
-          <input id="member-profile-primary-nickname" type="text" value="" readonly />
+          <input id="member-profile-primary-nickname" type="text" name="nickname" value="" />
         </label>
         <label>
           <span>추가 작혼 닉네임</span>
@@ -3175,8 +3225,7 @@ async function renderAdminLogTable(kind) {
                 .join(", ")
             : "";
           const details = [
-            item.currencyDelta ? `재화 ${Number(item.currencyDelta) > 0 ? "+" : ""}${Number(item.currencyDelta)}` : "",
-            item.traitPointDelta ? `포인트 ${Number(item.traitPointDelta) > 0 ? "+" : ""}${Number(item.traitPointDelta)}` : "",
+            item.currencyDelta ? `환 ${Number(item.currencyDelta) > 0 ? "+" : ""}${Number(item.currencyDelta)}` : "",
             itemSummary
               ? `아이템 ${escapeHtml(itemSummary)}`
               : item.addItemName
@@ -3363,7 +3412,7 @@ function buildParcelDisplayText(parcel) {
     parts.push(`아이템 ${parcel.item.name}`);
   }
   if (Number(parcel.currencyAmount || 0) > 0) {
-    parts.push(`재화 ${Number(parcel.currencyAmount || 0)} G`);
+    parts.push(`환 ${Number(parcel.currencyAmount || 0)}`);
   }
   return parts.join(" / ") || "내용물 없음";
 }
@@ -3444,6 +3493,35 @@ async function loadImageFromFile(file) {
     target.onerror = () => reject(new Error("이미지를 불러오지 못했습니다."));
     target.src = dataUrl;
   });
+}
+
+async function compressImageFile(file, maxSize = 960) {
+  const image = await loadImageFromFile(file);
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("이미지를 처리하지 못했습니다.");
+  }
+
+  const longestSide = Math.max(image.width, image.height, 1);
+  const ratio = Math.min(1, maxSize / longestSide);
+  canvas.width = Math.max(1, Math.round(image.width * ratio));
+  canvas.height = Math.max(1, Math.round(image.height * ratio));
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+
+function buildReportLogId(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    "_",
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join("");
 }
 
 async function compressCanvas(sourceCanvas, maxSize = 240) {

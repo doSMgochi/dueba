@@ -17,7 +17,7 @@ service cloud.firestore {
       allow update: if signedIn() &&
         resource.data.uid == request.auth.uid &&
         request.resource.data.uid == resource.data.uid &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(["dismissedAnnouncementIds", "updatedAt", "profileSealImage", "extraNicknames"]);
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(["dismissedAnnouncementIds", "updatedAt", "profileSealImage", "extraNicknames", "nickname"]);
       allow delete: if false;
     }
 
@@ -87,7 +87,15 @@ service cloud.firestore {
         request.resource.data.uid == request.auth.uid &&
         request.resource.data.characterName is string &&
         request.resource.data.title is string &&
-        request.resource.data.body is string;
+        request.resource.data.body is string &&
+        (
+          !("screenshotUrls" in request.resource.data) ||
+          request.resource.data.screenshotUrls is list
+        ) &&
+        (
+          !("screenshotUrl" in request.resource.data) ||
+          request.resource.data.screenshotUrl is string
+        );
       allow read, update, delete: if false;
     }
 

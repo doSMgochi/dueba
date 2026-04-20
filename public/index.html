@@ -13,8 +13,7 @@
           <p class="eyebrow">DUEBA</p>
           <h1>로그인</h1>
           <p class="auth-copy">
-            자체 계정으로 로그인하고 상점, 인벤토리, 룰렛, 대국 정보, 스탯 메뉴로
-            이동합니다.
+            이메일로 가입한 계정으로 로그인하고 로비, 인벤토리, 상점, 룰렛, 대국 결과 메뉴로 이동할 수 있습니다.
           </p>
 
           <form id="login-form" class="stack-form">
@@ -28,6 +27,11 @@
             </label>
             <button type="submit" class="primary-button">로그인</button>
           </form>
+
+          <div class="auth-helper-row">
+            <button id="open-find-id-modal" type="button" class="ghost-button compact-button">아이디 찾기</button>
+            <button id="open-reset-password-modal" type="button" class="ghost-button compact-button">비밀번호 찾기</button>
+          </div>
 
           <button id="open-signup-modal" type="button" class="ghost-button wide">
             회원가입
@@ -50,15 +54,15 @@
 
         <section class="stats-strip">
           <article class="mini-card">
-            <span>보유 재화</span>
-            <strong id="currency-value">0 G</strong>
+            <span>보유 환</span>
+            <strong id="currency-value">0 환</strong>
           </article>
           <article class="mini-card">
             <span>인벤토리 수</span>
             <strong id="inventory-count">0</strong>
           </article>
           <article class="mini-card">
-            <span>남은 스탯 포인트</span>
+            <span>랭킹 포인트</span>
             <strong id="stat-points">0</strong>
           </article>
         </section>
@@ -69,7 +73,7 @@
     </div>
 
     <div id="signup-modal" class="modal-backdrop hidden">
-      <div class="modal-panel">
+      <div class="modal-panel auth-modal-panel">
         <div class="modal-head">
           <div>
             <p class="eyebrow">SIGN UP</p>
@@ -81,56 +85,70 @@
         <form id="signup-form" class="stack-form">
           <label>
             <span>아이디</span>
-            <input
-              type="text"
-              name="loginId"
-              minlength="4"
-              maxlength="20"
-              placeholder="login_id"
-              required
-            />
+            <input type="text" name="loginId" minlength="4" maxlength="20" placeholder="login_id" required />
           </label>
           <label>
-            <span>작혼 닉네임</span>
-            <input
-              type="text"
-              name="nickname"
-              maxlength="24"
-              placeholder="작혼 닉네임"
-              required
-            />
+            <span>이메일</span>
+            <input type="email" name="email" maxlength="100" placeholder="name@example.com" required />
+          </label>
+          <label>
+            <span>대표 작혼 닉네임</span>
+            <input type="text" name="nickname" maxlength="24" placeholder="작혼 닉네임" required />
           </label>
           <label>
             <span>캐릭터 이름</span>
-            <input
-              type="text"
-              name="characterName"
-              maxlength="24"
-              placeholder="캐릭터 이름"
-              required
-            />
+            <input type="text" name="characterName" maxlength="24" placeholder="캐릭터 이름" required />
           </label>
           <label>
             <span>비밀번호</span>
-            <input
-              type="password"
-              name="password"
-              minlength="8"
-              placeholder="8자 이상"
-              required
-            />
+            <input type="password" name="password" minlength="8" placeholder="8자 이상" required />
           </label>
           <label>
             <span>비밀번호 확인</span>
-            <input
-              type="password"
-              name="passwordConfirm"
-              minlength="8"
-              placeholder="비밀번호 재입력"
-              required
-            />
+            <input type="password" name="passwordConfirm" minlength="8" placeholder="비밀번호 재입력" required />
           </label>
           <button type="submit" class="primary-button">회원가입 완료</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="find-id-modal" class="modal-backdrop hidden">
+      <div class="modal-panel auth-modal-panel">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">FIND ID</p>
+            <h2>아이디 찾기</h2>
+          </div>
+          <button id="close-find-id-modal" type="button" class="icon-button">x</button>
+        </div>
+
+        <form id="find-id-form" class="stack-form">
+          <label>
+            <span>가입 이메일</span>
+            <input type="email" name="email" placeholder="name@example.com" required />
+          </label>
+          <button type="submit" class="primary-button">아이디 확인</button>
+        </form>
+        <p id="find-id-result" class="auth-result muted hidden"></p>
+      </div>
+    </div>
+
+    <div id="reset-password-modal" class="modal-backdrop hidden">
+      <div class="modal-panel auth-modal-panel">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">RESET PASSWORD</p>
+            <h2>비밀번호 찾기</h2>
+          </div>
+          <button id="close-reset-password-modal" type="button" class="icon-button">x</button>
+        </div>
+
+        <form id="reset-password-form" class="stack-form">
+          <label>
+            <span>가입 이메일</span>
+            <input type="email" name="email" placeholder="name@example.com" required />
+          </label>
+          <button type="submit" class="primary-button">재설정 메일 보내기</button>
         </form>
       </div>
     </div>

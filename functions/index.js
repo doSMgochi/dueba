@@ -95,6 +95,7 @@ exports.ensureUserProfile = onCall(async (request) => {
     {
       uid,
       loginId,
+      email: String(request.auth.token.email || "").trim().toLowerCase(),
       nickname,
       characterName: normalizedCharacterName,
       role: "user",
@@ -111,6 +112,68 @@ exports.ensureUserProfile = onCall(async (request) => {
   );
 
   return { ok: true };
+});
+
+exports.validateSignupProfile = onCall(async (request) => {
+  const { loginId, email, characterName } = request.data || {};
+  const normalizedLoginId = String(loginId || "").trim().toLowerCase();
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const normalizedCharacterName = String(characterName || "").trim();
+
+  if (!normalizedLoginId || !normalizedEmail || !normalizedCharacterName) {
+    throw new HttpsError("invalid-argument", "아이디, 이메일, 캐릭터 이름을 모두 입력해 주세요.");
+  }
+
+  const [loginIdSnapshot, characterSnapshot, emailSnapshot] = await Promise.all([
+    db.collection("users").where("loginId", "==", normalizedLoginId).limit(1).get(),
+    db.collection("users").doc(normalizedCharacterName).get(),
+    db.collection("users").where("email", "==", normalizedEmail).limit(1).get(),
+  ]);
+
+  if (!loginIdSnapshot.empty) {
+    throw new HttpsError("already-exists", "이미 사용 중인 아이디입니다.");
+  }
+
+  if (characterSnapshot.exists) {
+    throw new HttpsError("already-exists", "이미 사용 중인 캐릭터 이름입니다.");
+  }
+
+  if (!emailSnapshot.empty) {
+    throw new HttpsError("already-exists", "이미 사용 중인 이메일입니다.");
+  }
+
+  return { ok: true };
+});
+
+exports.resolveLoginEmail = onCall(async (request) => {
+  const normalizedLoginId = String(request.data?.loginId || "").trim().toLowerCase();
+  if (!normalizedLoginId) {
+    throw new HttpsError("invalid-argument", "아이디를 입력해 주세요.");
+  }
+
+  const snapshot = await db.collection("users").where("loginId", "==", normalizedLoginId).limit(1).get();
+  if (snapshot.empty) {
+    throw new HttpsError("not-found", "가입된 계정을 찾지 못했습니다.");
+  }
+
+  const data = snapshot.docs[0].data();
+  return {
+    email: String(data.email || `${normalizedLoginId}@internal.app`).trim().toLowerCase(),
+  };
+});
+
+exports.findLoginIdByEmail = onCall(async (request) => {
+  const normalizedEmail = String(request.data?.email || "").trim().toLowerCase();
+  if (!normalizedEmail) {
+    throw new HttpsError("invalid-argument", "이메일을 입력해 주세요.");
+  }
+
+  const snapshot = await db.collection("users").where("email", "==", normalizedEmail).limit(1).get();
+  if (snapshot.empty) {
+    throw new HttpsError("not-found", "가입된 계정을 찾지 못했습니다.");
+  }
+
+  return { loginId: String(snapshot.docs[0].data().loginId || "") };
 });
 
 exports.getDashboardData = onCall(async (request) => {
@@ -501,7 +564,7 @@ exports.purchaseShopItem = onCall(async (request) => {
   const price = Number(shopItem.price || 0);
   const totalPrice = price * quantity;
   if (currentCurrency < totalPrice) {
-    throw new HttpsError("failed-precondition", `보유 재화가 부족합니다. 현재 ${currentCurrency} G만 보유 중입니다.`);
+    throw new HttpsError("failed-precondition", `보유 환이 부족합니다. 현재 ${currentCurrency}환만 보유 중입니다.`);
   }
 
   const itemDefinition = itemDefinitionSnapshot.exists
@@ -691,7 +754,7 @@ exports.sendParcel = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "받는 사람 캐릭터명을 입력해 주세요.");
   }
   if (!normalizedItemKeys.length && numericCurrencyAmount <= 0) {
-    throw new HttpsError("invalid-argument", "보낼 아이템이나 재화를 하나 이상 입력해 주세요.");
+    throw new HttpsError("invalid-argument", "보낼 아이템이나 환을 하나 이상 입력해 주세요.");
   }
 
   const receiverSnapshot = await findUserSnapshotByCharacterName(receiverCharacterName);
@@ -720,7 +783,7 @@ exports.sendParcel = onCall(async (request) => {
     if (numericCurrencyAmount > currentCurrency) {
       throw new HttpsError(
         "failed-precondition",
-        `보유 재화가 부족합니다. 현재 ${currentCurrency} G만 보유 중입니다.`
+        `보유 환이 부족합니다. 현재 ${currentCurrency}환만 보유 중입니다.`
       );
     }
 
@@ -1167,7 +1230,7 @@ function buildParcelPreview({ itemName, itemNames = [], currencyAmount }) {
     parts.push(`?꾩씠??${String(itemName).trim()}`);
   }
   if (Number(currencyAmount || 0) > 0) {
-    parts.push(`?ы솕 ${Number(currencyAmount || 0)} G`);
+    parts.push(`환 ${Number(currencyAmount || 0)}`);
   }
   return parts.join(" / ") || "?뚰룷媛 ?꾩갑?덉뒿?덈떎.";
 }

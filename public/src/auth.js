@@ -1,8 +1,10 @@
 import {
   EmailAuthProvider,
   createUserWithEmailAndPassword,
+  fetchSignInMethodsForEmail,
   onAuthStateChanged,
   reauthenticateWithCredential,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
   updatePassword,
@@ -23,6 +25,9 @@ import {
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-functions.js";
 import { auth, db, functions } from "./firebase.js";
 
+const validateSignupProfileCallable = httpsCallable(functions, "validateSignupProfile");
+const resolveLoginEmailCallable = httpsCallable(functions, "resolveLoginEmail");
+const findLoginIdByEmailCallable = httpsCallable(functions, "findLoginIdByEmail");
 const selectTraitCallable = httpsCallable(functions, "selectTrait");
 const getRankingBoardCallable = httpsCallable(functions, "getRankingBoard");
 const adminManageUserCallable = httpsCallable(functions, "adminManageUser");
@@ -46,14 +51,15 @@ function normalizeCharacterName(characterName) {
   return String(characterName || "").trim();
 }
 
-function toInternalEmail(loginId) {
-  return `${normalizeLoginId(loginId)}@internal.app`;
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
 }
 
-function buildDefaultProfile({ uid, loginId, nickname, characterName }) {
+function buildDefaultProfile({ uid, loginId, email, nickname, characterName }) {
   return {
     uid,
     loginId,
+    email: normalizeEmail(email),
     nickname: String(nickname || "").trim(),
     characterName: normalizeCharacterName(characterName),
     role: "user",
@@ -69,10 +75,12 @@ function buildDefaultProfile({ uid, loginId, nickname, characterName }) {
 }
 
 function buildBootstrapProfileFromUser(user) {
+  const email = normalizeEmail(user?.email || "");
   const loginId = normalizeLoginId(user?.email?.split("@")[0] || user?.uid || "player");
   return buildDefaultProfile({
     uid: user.uid,
     loginId,
+    email,
     nickname: loginId,
     characterName: loginId,
   });
@@ -88,10 +96,12 @@ function toFriendlyError(error) {
     "functions/permission-denied",
   ]);
   const errorMap = {
-    "auth/email-already-in-use": "이미 사용 중인 아이디입니다.",
-    "auth/invalid-email": "아이디 형식이 올바르지 않습니다.",
+    "auth/email-already-in-use": "이미 사용 중인 이메일입니다.",
+    "auth/invalid-email": "이메일 형식이 올바르지 않습니다.",
     "auth/invalid-credential": "아이디 또는 비밀번호가 올바르지 않습니다.",
     "auth/missing-password": "비밀번호를 입력해 주세요.",
+    "auth/user-not-found": "가입된 계정을 찾지 못했습니다.",
+    "auth/too-many-requests": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
     "functions/not-found": "대상을 찾지 못했습니다.",
     "functions/invalid-argument": "입력값을 다시 확인해 주세요.",
     "functions/already-exists": "이미 존재하는 데이터입니다.",
@@ -140,6 +150,7 @@ async function createProfileFallback(uid, payload) {
     doc(db, "users", characterName),
     buildDefaultProfile({
       uid,
+      email: payload.email,
       loginId: payload.loginId,
       nickname: payload.nickname,
       characterName,
@@ -150,7 +161,7 @@ async function createProfileFallback(uid, payload) {
 
 async function ensureBootstrapProfileForCurrentUser() {
   if (!auth.currentUser) {
-    throw new Error("로그인된 유저가 없습니다.");
+    throw new Error("로그인한 유저가 없습니다.");
   }
 
   const existingProfile = await findUserProfileByUid(auth.currentUser.uid);
@@ -172,11 +183,13 @@ async function ensureBootstrapProfileForCurrentUser() {
   };
 }
 
-export async function signUpWithProfile({ loginId, nickname, characterName, password }) {
+export async function signUpWithProfile({ loginId, email, nickname, characterName, password }) {
   const normalizedLoginId = normalizeLoginId(loginId);
+  const normalizedEmail = normalizeEmail(email);
   const normalizedCharacterName = normalizeCharacterName(characterName);
   const payload = {
     loginId: normalizedLoginId,
+    email: normalizedEmail,
     nickname,
     characterName: normalizedCharacterName,
   };
@@ -186,13 +199,19 @@ export async function signUpWithProfile({ loginId, nickname, characterName, pass
   }
 
   try {
-    const userCredential = await createUserWithEmailAndPassword(
-      auth,
-      toInternalEmail(normalizedLoginId),
-      password
-    );
-    await createProfileFallback(userCredential.user.uid, payload);
+    await validateSignupProfileCallable({
+      loginId: normalizedLoginId,
+      email: normalizedEmail,
+      characterName: normalizedCharacterName,
+    });
 
+    const existingMethods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
+    if (existingMethods.length) {
+      throw new Error("이미 사용 중인 이메일입니다.");
+    }
+
+    const userCredential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+    await createProfileFallback(userCredential.user.uid, payload);
     return userCredential.user;
   } catch (error) {
     throw toFriendlyError(error);
@@ -201,12 +220,35 @@ export async function signUpWithProfile({ loginId, nickname, characterName, pass
 
 export async function loginWithId(loginId, password) {
   try {
-    const userCredential = await signInWithEmailAndPassword(
-      auth,
-      toInternalEmail(loginId),
-      password
-    );
+    const result = await resolveLoginEmailCallable({ loginId: normalizeLoginId(loginId) });
+    const email = normalizeEmail(result.data?.email || "");
+    if (!email) {
+      throw new Error("가입된 계정을 찾지 못했습니다.");
+    }
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
     return userCredential.user;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function findLoginIdByEmail(email) {
+  try {
+    const result = await findLoginIdByEmailCallable({ email: normalizeEmail(email) });
+    return String(result.data?.loginId || "");
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function requestPasswordResetEmail(email) {
+  try {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) {
+      throw new Error("이메일을 입력해 주세요.");
+    }
+    await sendPasswordResetEmail(auth, normalizedEmail);
+    return { ok: true };
   } catch (error) {
     throw toFriendlyError(error);
   }
@@ -229,7 +271,7 @@ export async function refreshCurrentUserProfile() {
     return ensureBootstrapProfileForCurrentUser();
   }
 
-  throw new Error("로그인된 유저가 없습니다.");
+  throw new Error("로그인한 유저가 없습니다.");
 }
 
 export function onSignedInUserChanged(callback) {
@@ -284,6 +326,13 @@ export async function getRankingBoard() {
           nickname: data.nickname || "-",
           rankingPoints: Number(data.rankingPoints || 0),
           currency: Number(data.currency || 0),
+          inventoryTypeCount: Array.from(
+            new Set(
+              (Array.isArray(data.inventory) ? data.inventory : [])
+                .map((inventoryItem) => inventoryItem?.itemId || inventoryItem?.name || "")
+                .filter(Boolean)
+            )
+          ).length,
           totalTraitPoints: Number(data.availableTraitPoints || 0) + usedTraitPoints,
         };
       })
@@ -373,7 +422,7 @@ export async function purchaseShopItem(shopItemId, quantity = 1) {
 export async function dismissAnnouncement(announcementId) {
   try {
     if (!auth.currentUser) {
-      throw new Error("로그인된 유저가 없습니다.");
+      throw new Error("로그인한 유저가 없습니다.");
     }
 
     const profile = await findUserProfileByUid(auth.currentUser.uid);
@@ -422,7 +471,7 @@ export async function updateProfileSealImage(profileSealImage) {
   }
 }
 
-export async function updateMemberProfile({ extraNicknames = [] }) {
+export async function updateMemberProfile({ nickname = "", extraNicknames = [] }) {
   try {
     if (!auth.currentUser) {
       throw new Error("로그인한 유저가 없습니다.");
@@ -433,11 +482,17 @@ export async function updateMemberProfile({ extraNicknames = [] }) {
       throw new Error("유저 프로필을 찾지 못했습니다.");
     }
 
+    const normalizedNickname = String(nickname || "").trim();
     const normalizedExtraNicknames = Array.isArray(extraNicknames)
       ? extraNicknames.map((item) => String(item || "").trim()).filter(Boolean)
       : [];
 
+    if (!normalizedNickname) {
+      throw new Error("대표 작혼 닉네임을 입력해 주세요.");
+    }
+
     await updateDoc(doc(db, "users", profile.id), {
+      nickname: normalizedNickname,
       extraNicknames: normalizedExtraNicknames,
       updatedAt: serverTimestamp(),
     });
@@ -445,6 +500,7 @@ export async function updateMemberProfile({ extraNicknames = [] }) {
     return {
       docId: profile.id,
       ...profile.data,
+      nickname: normalizedNickname,
       extraNicknames: normalizedExtraNicknames,
     };
   } catch (error) {
