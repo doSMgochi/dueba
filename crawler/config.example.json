@@ -1,0 +1,28 @@
+{
+  "yostar_login_id": "you@example.com",
+  "yostar_login_password": "your-password",
+  "yostar_mail_email": "you@example.com",
+  "yostar_mail_password": "your-app-password",
+  "yostar_mail_imap_host": "imap.gmail.com",
+  "yostar_mail_timeout_seconds": 120,
+  "yostar_mail_poll_interval_seconds": 5,
+  "firestore_service_account_path": "../service-account.local.json",
+  "headless": false,
+  "poll_interval_seconds": 300,
+  "contests": [
+    {
+      "key": "ranked-4p-hanchan",
+      "name": "4인 반장전",
+      "record_url": "https://mahjongsoul.tournament.yo-star.com/kr/contest_dashboard/index.html#/contest/11988063/season/1/record",
+      "team_manager_url": "https://mahjongsoul.tournament.yo-star.com/kr/contest_dashboard/index.html#/contest/11988063/season/1/team_manager",
+      "player_count": 4
+    },
+    {
+      "key": "ranked-3p-hanchan",
+      "name": "3인 반장전",
+      "record_url": "https://mahjongsoul.tournament.yo-star.com/kr/contest_dashboard/index.html#/contest/38272733/season/1/record",
+      "team_manager_url": "https://mahjongsoul.tournament.yo-star.com/kr/contest_dashboard/index.html#/contest/38272733/season/1/team_manager",
+      "player_count": 3
+    }
+  ]
+}

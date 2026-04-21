@@ -17,6 +17,15 @@ functions/.env*
 service-account*.json
 *-firebase-adminsdk-*.json
 dueba-*.json
+crawler/config.local.json
+crawler/logs/
+crawler/user_data/
+crawler/user_data_crawler/
+crawler/debug/
+crawler/__pycache__/
+external/
+.venv/
+public/assets/item-dots/
 
 # OS / Editor
 .DS_Store

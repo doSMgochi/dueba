@@ -30,12 +30,12 @@
 
           <div class="auth-helper-row">
             <button id="open-find-id-modal" type="button" class="ghost-button compact-button">아이디 찾기</button>
-            <button id="open-reset-password-modal" type="button" class="ghost-button compact-button">비밀번호 찾기</button>
+            <button id="open-reset-password-modal" type="button" class="ghost-button compact-button">
+              비밀번호 찾기
+            </button>
           </div>
 
-          <button id="open-signup-modal" type="button" class="ghost-button wide">
-            회원가입
-          </button>
+          <button id="open-signup-modal" type="button" class="ghost-button wide">회원가입</button>
         </div>
       </section>
 
@@ -52,14 +52,16 @@
           </div>
         </header>
 
-        <section class="stats-strip">
+        <button id="mobile-info-toggle" type="button" class="ghost-button mobile-info-toggle">정보 보기</button>
+
+        <section id="dashboard-stats-strip" class="stats-strip">
           <article class="mini-card">
             <span>보유 환</span>
             <strong id="currency-value">0 환</strong>
           </article>
           <article class="mini-card">
-            <span>인벤토리 수</span>
-            <strong id="inventory-count">0</strong>
+            <span>진영</span>
+            <strong id="faction-value">미설정</strong>
           </article>
           <article class="mini-card">
             <span>랭킹 포인트</span>
@@ -98,6 +100,28 @@
           <label>
             <span>캐릭터 이름</span>
             <input type="text" name="characterName" maxlength="24" placeholder="캐릭터 이름" required />
+          </label>
+          <label>
+            <span>친구 코드</span>
+            <input
+              type="text"
+              name="friendCode"
+              inputmode="numeric"
+              pattern="[0-9]+"
+              maxlength="20"
+              placeholder="숫자만 입력"
+              required
+            />
+          </label>
+          <label>
+            <span>파벌 이름</span>
+            <select name="factionName" required>
+              <option value="">파벌을 선택하세요</option>
+              <option value="매화">매화</option>
+              <option value="난초">난초</option>
+              <option value="국화">국화</option>
+              <option value="대나무">대나무</option>
+            </select>
           </label>
           <label>
             <span>비밀번호</span>
@@ -148,7 +172,7 @@
             <span>가입 이메일</span>
             <input type="email" name="email" placeholder="name@example.com" required />
           </label>
-          <button type="submit" class="primary-button">재설정 메일 보내기</button>
+          <button type="submit" class="primary-button">임시 비밀번호 메일 보내기</button>
         </form>
       </div>
     </div>

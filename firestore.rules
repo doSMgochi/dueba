@@ -11,13 +11,24 @@ service cloud.firestore {
         request.resource.data.uid == request.auth.uid &&
         characterName == request.resource.data.characterName &&
         request.resource.data.loginId is string &&
+        request.resource.data.email is string &&
         request.resource.data.nickname is string &&
         request.resource.data.characterName is string &&
+        request.resource.data.friendCode is string &&
+        request.resource.data.factionName is string &&
         request.resource.data.role == "user";
       allow update: if signedIn() &&
         resource.data.uid == request.auth.uid &&
         request.resource.data.uid == resource.data.uid &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(["dismissedAnnouncementIds", "updatedAt", "profileSealImage", "extraNicknames", "nickname"]);
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "dismissedAnnouncementIds",
+          "updatedAt",
+          "profileSealImage",
+          "extraNicknames",
+          "nickname",
+          "friendCode",
+          "factionName"
+        ]);
       allow delete: if false;
     }
 

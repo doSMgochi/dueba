@@ -37,6 +37,7 @@ let dashboardState = {
   profile: null,
   activeMenuId: menuDefinitions[0].id,
 };
+let lastTeamWarningKey = "";
 
 bindModal(signupModal, openSignupModalButton, closeSignupModalButton, () => {
   signupForm.reset();
@@ -60,12 +61,14 @@ signupForm.addEventListener("submit", async (event) => {
   }
 
   try {
-    showToast("처리중입니다");
+    showToast("처리중입니다.");
     await signUpWithProfile({
       loginId: payload.loginId,
       email: payload.email,
       nickname: payload.nickname,
       characterName: payload.characterName,
+      friendCode: payload.friendCode,
+      factionName: payload.factionName,
       password: payload.password,
     });
     signupForm.reset();
@@ -81,9 +84,9 @@ findIdForm.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(new FormData(findIdForm).entries());
 
   try {
-    showToast("처리중입니다");
+    showToast("처리중입니다.");
     const loginId = await findLoginIdByEmail(payload.email);
-    findIdResult.textContent = `가입된 아이디는 ${loginId} 입니다.`;
+    findIdResult.textContent = `가입한 아이디는 ${loginId} 입니다.`;
     findIdResult.classList.remove("hidden");
   } catch (error) {
     findIdResult.textContent = error.message;
@@ -97,7 +100,7 @@ resetPasswordForm.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(new FormData(resetPasswordForm).entries());
 
   try {
-    showToast("처리중입니다");
+    showToast("처리중입니다.");
     await requestPasswordResetEmail(payload.email);
     resetPasswordForm.reset();
     closeModal(resetPasswordModal);
@@ -124,7 +127,7 @@ loginForm.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(new FormData(loginForm).entries());
 
   try {
-    showToast("처리중입니다");
+    showToast("처리중입니다.");
     await loginWithId(payload.loginId, payload.password);
     loginForm.reset();
     showToast("로그인되었습니다.");
@@ -135,7 +138,7 @@ loginForm.addEventListener("submit", async (event) => {
 
 logoutButton.addEventListener("click", async () => {
   await logoutUser();
-  showToast("로그아웃했습니다.");
+  showToast("로그아웃되었습니다.");
 });
 
 menuTabs.addEventListener("click", (event) => {
@@ -153,6 +156,7 @@ onSignedInUserChanged((profile) => {
   dashboardView.classList.toggle("hidden", !isLoggedIn);
 
   if (!isLoggedIn) {
+    lastTeamWarningKey = "";
     dashboardState = {
       profile: null,
       activeMenuId: menuDefinitions[0].id,
@@ -162,6 +166,7 @@ onSignedInUserChanged((profile) => {
     return;
   }
 
+  maybeShowTeamEnrollmentWarning(profile);
   updateDashboard(profile, dashboardState.activeMenuId);
 });
 
@@ -201,7 +206,8 @@ function closeModal(modal, onClose = null) {
   }
 }
 
-function showToast(message, isError = false) {
+function showToast(message, isError = false, options = {}) {
+  const persist = Boolean(options?.persist);
   toast.textContent = message;
   toast.classList.remove("hidden", "error");
   if (isError) {
@@ -209,7 +215,45 @@ function showToast(message, isError = false) {
   }
 
   window.clearTimeout(showToast.timerId);
-  showToast.timerId = window.setTimeout(() => {
+  if (!persist) {
+    showToast.timerId = window.setTimeout(() => {
+      toast.classList.add("hidden");
+    }, 3000);
+  }
+}
+
+showToast.hideIfMessage = (expectedMessage) => {
+  if (toast.textContent === expectedMessage) {
+    window.clearTimeout(showToast.timerId);
     toast.classList.add("hidden");
-  }, 3000);
+  }
+};
+
+function maybeShowTeamEnrollmentWarning(profile) {
+  const status = String(profile?.teamEnrollmentStatus || "").trim();
+  if (status !== "invalid-friend-code") {
+    return;
+  }
+
+  const rawMessage = String(profile?.teamEnrollmentMessage || "").trim();
+  const warningKey = `${profile.uid}:${status}:${rawMessage}`;
+  if (warningKey === lastTeamWarningKey) {
+    return;
+  }
+
+  lastTeamWarningKey = warningKey;
+  showToast(resolveTeamEnrollmentWarningMessage(rawMessage), true);
+}
+
+function resolveTeamEnrollmentWarningMessage(rawMessage) {
+  if (!rawMessage || looksLikeBrokenKorean(rawMessage)) {
+    return "친구코드가 비어 있거나 숫자가 아닙니다. 수정해주세요.";
+  }
+
+  return "친구코드를 확인해주세요. 잘못 등록되어 있을 수 있습니다.";
+}
+
+function looksLikeBrokenKorean(value) {
+  const text = String(value || "").trim();
+  return Boolean(text) && !/[가-힣]/.test(text);
 }

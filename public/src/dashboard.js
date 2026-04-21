@@ -18,6 +18,15 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-storage.js";
 import { db, storage } from "./firebase.js";
 import {
+  buildItemSpritePicker,
+  getItemSprite,
+  getItemSpriteCategory,
+  getItemSpriteUrl,
+  itemSpriteCategories,
+  normalizeSpriteCategory,
+  renderItemVisual,
+} from "./item-sprites.js";
+import {
   adminDeleteUser,
   adminManageUser,
   createItemDefinition,
@@ -94,16 +103,26 @@ let activeResultMode = "ranked-4p-hanchan";
 let matchResultsPage = 0;
 let notificationPanelPage = 0;
 let todoPage = 0;
+let shopPage = 0;
 let pendingAdminItemIds = [];
 let selectedParcelItemKeys = [];
 let bugReportPage = 0;
+let adminItemCatalogCache = [];
+let adminItemCatalogPromise = null;
 const quickProfileCacheTtl = 60 * 1000;
 let rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
 let activeAdminItemSection = "create";
+let mobileInfoExpanded = false;
 
 async function withPendingToast(onToast, task) {
-  onToast("처리중입니다");
-  return task();
+  onToast("처리중입니다.", false, { persist: true });
+  try {
+    return await task();
+  } finally {
+    window.setTimeout(() => {
+      onToast.hideIfMessage?.("처리중입니다.");
+    }, 0);
+  }
 }
 
 async function getCachedRankingBoard(forceRefresh = false) {
@@ -145,6 +164,7 @@ export function buildDashboard({
   onProfilePatched,
   onToast,
 }) {
+  initializeFloatingTooltip();
   const visibleMenus = menuDefinitions.filter((menu) => !menu.adminOnly || adminRoles.includes(profile.role));
   const safeActiveMenuId = visibleMenus.some((menu) => menu.id === activeMenuId)
     ? activeMenuId
@@ -154,8 +174,25 @@ export function buildDashboard({
   document.querySelector("#profile-summary").textContent = `${profile.nickname} | ID ${profile.loginId}`;
   document.querySelector("#role-badge").textContent = profile.role;
   document.querySelector("#currency-value").textContent = `${Number(profile.currency || 0)} 환`;
-  document.querySelector("#inventory-count").textContent = String(profile.inventory?.length || 0);
+  document.querySelector("#faction-value").textContent = String(profile.factionName || "미설정");
   document.querySelector("#stat-points").textContent = String(profile.rankingPoints || 0);
+
+  const mobileInfoToggle = document.querySelector("#mobile-info-toggle");
+  const statsStrip = document.querySelector("#dashboard-stats-strip");
+  if (mobileInfoToggle && statsStrip) {
+    const syncMobileInfoPanel = () => {
+      statsStrip.classList.toggle("is-open", mobileInfoExpanded);
+      mobileInfoToggle.textContent = mobileInfoExpanded ? "정보 닫기" : "정보 보기";
+      mobileInfoToggle.setAttribute("aria-expanded", mobileInfoExpanded ? "true" : "false");
+    };
+
+    mobileInfoToggle.onclick = () => {
+      mobileInfoExpanded = !mobileInfoExpanded;
+      syncMobileInfoPanel();
+    };
+
+    syncMobileInfoPanel();
+  }
 
   menuTabs.innerHTML = visibleMenus
     .map((menu) => {
@@ -170,6 +207,9 @@ export function buildDashboard({
   renderNotificationBell({ profile, onProfilePatched, onToast });
   renderProfileQuickButton({ profile, onProfilePatched, onToast });
   void hydrateNotificationBadge(profile);
+  if (adminRoles.includes(profile.role)) {
+    void loadAdminItemCatalog();
+  }
 
   menuContent.innerHTML = renderMenuContent(safeActiveMenuId, profile);
 
@@ -194,16 +234,95 @@ export function buildDashboard({
   void syncAnnouncementModal({ profile, onProfilePatched, onToast });
 }
 
+function initializeFloatingTooltip() {
+  if (document.body.dataset.tooltipBound === "true") return;
+  document.body.dataset.tooltipBound = "true";
+
+  const tooltip = document.createElement("div");
+  tooltip.id = "floating-tooltip";
+  tooltip.className = "floating-tooltip hidden";
+  document.body.appendChild(tooltip);
+
+  let activeTarget = null;
+
+  const hideTooltip = () => {
+    activeTarget = null;
+    tooltip.classList.add("hidden");
+  };
+
+  const updateTooltip = (event) => {
+    if (!activeTarget) return;
+    const text = String(activeTarget.getAttribute("data-tooltip") || "").trim();
+    if (!text) {
+      hideTooltip();
+      return;
+    }
+
+    tooltip.textContent = text;
+    tooltip.classList.remove("hidden");
+
+    const margin = 12;
+    const offset = 18;
+    const rect = tooltip.getBoundingClientRect();
+    let left = event.clientX + offset;
+    let top = event.clientY - rect.height - offset;
+
+    if (left + rect.width > window.innerWidth - margin) {
+      left = window.innerWidth - rect.width - margin;
+    }
+    if (left < margin) {
+      left = margin;
+    }
+    if (top < margin) {
+      top = event.clientY + offset;
+    }
+    if (top + rect.height > window.innerHeight - margin) {
+      top = window.innerHeight - rect.height - margin;
+    }
+
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  };
+
+  document.addEventListener("mouseover", (event) => {
+    const target = event.target.closest("[data-tooltip]");
+    if (!target) {
+      hideTooltip();
+      return;
+    }
+    activeTarget = target;
+    updateTooltip(event);
+  });
+
+  document.addEventListener("mousemove", (event) => {
+    if (!activeTarget) return;
+    updateTooltip(event);
+  });
+
+  document.addEventListener("mouseout", (event) => {
+    if (!activeTarget) return;
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Element && activeTarget.contains(nextTarget)) {
+      return;
+    }
+    if (event.target instanceof Element && event.target.closest("[data-tooltip]") === activeTarget) {
+      hideTooltip();
+    }
+  });
+
+  window.addEventListener("scroll", hideTooltip, true);
+  window.addEventListener("resize", hideTooltip);
+}
+
 function renderMenuContent(menuId, profile) {
   const isThreePlayerResultMode = activeResultMode.includes("3p");
   const inventoryItems = buildGroupedInventoryItems(profile.inventory)
     .map(({ item, count }) => {
       const tooltip = escapeHtml(`${item.name || "이름 없는 아이템"} | ${item.description || "설명이 아직 등록되지 않았습니다."}`);
       const safeGroupKey = escapeHtml(buildInventoryGroupKey(item));
-      const icon = escapeHtml(item.icon || "🎁");
       return `
         <li class="inventory-item inventory-tooltip draggable-item" data-tooltip="${tooltip}" draggable="true" data-inventory-group-key="${safeGroupKey}">
-          <div class="dot-slot">${icon}${count > 1 ? `<span class="inventory-count-badge">${count}</span>` : ""}</div>
+          ${renderItemVisual(item, { overlayHtml: count > 1 ? `<span class="inventory-count-badge">${count}</span>` : "" })}
           <button type="button" class="ghost-button compact-button inventory-use-button" data-inventory-use-group-key="${safeGroupKey}">사용</button>
         </li>
       `;
@@ -250,7 +369,7 @@ function renderMenuContent(menuId, profile) {
                 <th>작혼 닉네임</th>
                 <th>랭킹전 포인트</th>
                 <th>보유 환</th>
-                <th>보유 아이템 종류</th>
+                <th>파벌</th>
               </tr>
             </thead>
             <tbody id="ranking-table-body">
@@ -261,7 +380,7 @@ function renderMenuContent(menuId, profile) {
       </article>
     `,
     shop: `
-      <div id="shop-grid" class="content-grid three">
+      <div id="shop-grid" class="shop-list-shell">
         <article class="content-card full">
           <p class="muted">상점 정보를 불러오는 중입니다.</p>
         </article>
@@ -502,35 +621,72 @@ async function hydrateShopPanel({ onProfilePatched, onToast }) {
       return;
     }
 
-    shopGrid.innerHTML = shopItems
-      .map(
-        (item) => {
-          const itemMeta = itemDbMap.get(item.id) || {};
-          return `
-          <article class="content-card shop-item-card">
-            <div class="dot-slot large">${escapeHtml(itemMeta.icon || "🎁")}</div>
-            <div class="content-meta">
-              <h3>${escapeHtml(item.name || "이름 없음")}</h3>
-              <p>${escapeHtml(item.description || "설명 없음")}</p>
-              <strong>${Number(item.price || 0)} 환</strong>
-            </div>
-            <div class="shop-purchase-row">
-              <label class="shop-quantity-field">
-                <span>수량</span>
-                <input type="number" min="1" max="99" value="1" data-shop-quantity="${escapeHtml(item.id)}" />
-              </label>
-              <button type="button" class="primary-button compact-button" data-shop-purchase="${escapeHtml(item.id)}">구매</button>
-            </div>
-          </article>
-        `;
-        }
-      )
-      .join("");
+    const pageSize = 10;
+    const pageCount = Math.max(1, Math.ceil(shopItems.length / pageSize));
+    shopPage = Math.min(shopPage, pageCount - 1);
+    const pagedItems = shopItems.slice(shopPage * pageSize, shopPage * pageSize + pageSize);
+
+    shopGrid.innerHTML = `
+      <article class="content-card full">
+        <div class="shop-list-head">
+          <h3>상점</h3>
+          <div class="admin-log-pager">
+            <button type="button" class="ghost-button compact-button" data-shop-page="prev" ${shopPage === 0 ? "disabled" : ""}>이전</button>
+            <span class="muted">${shopPage + 1} / ${pageCount}</span>
+            <button type="button" class="ghost-button compact-button" data-shop-page="next" ${shopPage >= pageCount - 1 ? "disabled" : ""}>다음</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="log-table shop-list-table">
+            <thead>
+              <tr>
+                <th>물품</th>
+                <th>이름</th>
+                <th>가격</th>
+                <th>수량</th>
+                <th>구매</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${pagedItems
+                .map((item) => {
+                  const itemMeta = itemDbMap.get(item.id) || {};
+                  const mergedItem = { ...itemMeta, ...item };
+                  const tooltip = escapeHtml(item.description || itemMeta.description || "설명 없음");
+                  return `
+                    <tr class="shop-row" data-tooltip="${tooltip}">
+                      <td>${renderItemVisual(mergedItem)}</td>
+                      <td class="shop-item-name-cell">${escapeHtml(item.name || "이름 없음")}</td>
+                      <td>${Number(item.price || 0)} 환</td>
+                      <td>
+                        <input type="number" min="1" max="99" value="1" class="shop-quantity-inline" data-shop-quantity="${escapeHtml(item.id)}" />
+                      </td>
+                      <td>
+                        <button type="button" class="primary-button compact-button" data-shop-purchase="${escapeHtml(item.id)}">구매</button>
+                      </td>
+                    </tr>
+                  `;
+                })
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      </article>
+    `;
 
     shopGrid.querySelectorAll("[data-shop-purchase]").forEach((button) => {
       button.addEventListener("click", async () => {
         const quantityInput = shopGrid.querySelector(`[data-shop-quantity="${button.dataset.shopPurchase}"]`);
         const quantity = Math.max(1, Math.min(99, Number(quantityInput?.value || 1)));
+        const shopItem = pageItems.find((item) => item.id === button.dataset.shopPurchase);
+        const shouldPurchase = await openActionConfirmModal({
+          titleText: "상점 구매",
+          bodyText: `${shopItem?.name || "아이템"} ${quantity}개를 구매하시겠습니까?`,
+          confirmText: "구매",
+          cancelText: "취소",
+          eyebrowText: "구매 확인",
+        });
+        if (!shouldPurchase) return;
         try {
           button.disabled = true;
           if (quantityInput) quantityInput.disabled = true;
@@ -543,6 +699,19 @@ async function hydrateShopPanel({ onProfilePatched, onToast }) {
           button.disabled = false;
           if (quantityInput) quantityInput.disabled = false;
         }
+      });
+    });
+
+    shopGrid.querySelectorAll("[data-shop-page]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const direction = button.dataset.shopPage;
+        if (direction === "prev" && shopPage > 0) {
+          shopPage -= 1;
+        }
+        if (direction === "next" && shopPage < pageCount - 1) {
+          shopPage += 1;
+        }
+        await hydrateShopPanel({ onProfilePatched, onToast });
       });
     });
   } catch (_error) {
@@ -566,11 +735,11 @@ async function hydrateItemDatabasePanel() {
       .map(
         (item) => `
           <article class="content-card item-db-card">
-            <div class="item-db-icon">${escapeHtml(item.icon || "🎁")}</div>
+            <div class="item-db-icon">${renderItemVisual(item)}</div>
             <div class="content-meta">
               <h3>${escapeHtml(item.name || "이름 없음")}</h3>
               <p>${escapeHtml(item.description || "설명 없음")}</p>
-              <span class="pill-badge">${escapeHtml(item.category || "기타")}</span>
+              <span class="pill-badge">${escapeHtml(normalizeSpriteCategory(item.category || "기타 아이템"))}</span>
             </div>
           </article>
         `
@@ -765,32 +934,77 @@ async function renderBugReports() {
 }
 
 async function hydrateAdminItemOptions() {
-  const selects = Array.from(
-    document.querySelectorAll("#admin-item-select, #admin-item-edit-select, #admin-item-delete-select")
-  );
-  if (!selects.length) return;
+  const selectors = Array.from(document.querySelectorAll("[data-admin-item-selector]"));
+  if (!selectors.length) return;
+
+  selectors.forEach((selector) => {
+    const trigger = selector.querySelector("[data-item-selector-trigger]");
+    const label = selector.querySelector("[data-item-selector-label]");
+    const menu = selector.querySelector("[data-item-selector-menu]");
+    if (trigger) trigger.disabled = true;
+    if (label && !adminItemCatalogCache.length) {
+      label.textContent = "아이템을 불러오는 중입니다.";
+    }
+    if (menu && !adminItemCatalogCache.length) {
+      menu.innerHTML = '<div class="item-selector-empty">아이템을 불러오는 중입니다.</div>';
+    }
+  });
 
   try {
-    const items = await fetchCollectionItems("item-db", "sortOrder");
-    const optionsHtml = `
-      <option value="">아이템을 선택하세요</option>
-      ${items
-        .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.icon || "🎁")} ${escapeHtml(item.name || item.id)}</option>`)
-        .join("")}
-    `;
-    selects.forEach((select) => {
-      select.innerHTML = optionsHtml;
-    });
+    const items = await loadAdminItemCatalog();
+    adminItemCatalogCache = items;
+    refreshAdminItemSelectors({ selectors });
   } catch (_error) {
-    selects.forEach((select) => {
-      select.innerHTML = '<option value="">아이템을 불러오지 못했습니다</option>';
+    adminItemCatalogCache = [];
+    selectors.forEach((selector) => {
+      const trigger = selector.querySelector("[data-item-selector-trigger]");
+      const label = selector.querySelector("[data-item-selector-label]");
+      const menu = selector.querySelector("[data-item-selector-menu]");
+      if (trigger) trigger.disabled = false;
+      if (label) label.textContent = "아이템을 불러오지 못했습니다.";
+      if (menu) menu.innerHTML = '<div class="item-selector-empty">아이템을 불러오지 못했습니다.</div>';
     });
   }
 }
 
+async function loadAdminItemCatalog(forceRefresh = false) {
+  if (!forceRefresh && adminItemCatalogCache.length) {
+    return adminItemCatalogCache;
+  }
+
+  if (!forceRefresh && adminItemCatalogPromise) {
+    return adminItemCatalogPromise;
+  }
+
+  adminItemCatalogPromise = fetchCollectionItems("item-db", "sortOrder")
+    .then((items) => {
+      adminItemCatalogCache = items;
+      adminItemCatalogPromise = null;
+      return items;
+    })
+    .catch((error) => {
+      adminItemCatalogPromise = null;
+      throw error;
+    });
+
+  return adminItemCatalogPromise;
+}
+
+function refreshAdminItemSelectors({ root = document, selectors = null, preferredValues = new Map() } = {}) {
+  const targetSelectors = selectors || Array.from(root.querySelectorAll("[data-admin-item-selector]"));
+  targetSelectors.forEach((selector) => {
+    const trigger = selector.querySelector("[data-item-selector-trigger]");
+    if (trigger) trigger.disabled = false;
+    const hiddenInput = selector.querySelector("[data-item-selector-input]");
+    const preferredValue = preferredValues.get(selector.id);
+    const currentValue = String(preferredValue ?? hiddenInput?.value ?? "").trim();
+    const nextValue = adminItemCatalogCache.some((item) => item.id === currentValue) ? currentValue : "";
+    syncAdminItemSelector(selector, nextValue);
+  });
+}
+
 function renderAdminItemQueue() {
   const queue = document.querySelector("#admin-item-queue");
-  const select = document.querySelector("#admin-item-select");
   if (!queue) return;
 
   if (!pendingAdminItemIds.length) {
@@ -798,11 +1012,7 @@ function renderAdminItemQueue() {
     return;
   }
 
-  const optionMap = new Map(
-    Array.from(select?.options || [])
-      .filter((option) => option.value)
-      .map((option) => [option.value, option.textContent || option.value])
-  );
+  const itemMap = new Map(adminItemCatalogCache.map((item) => [item.id, item]));
 
   const countedItems = Array.from(
     pendingAdminItemIds.reduce((map, itemId) => {
@@ -815,7 +1025,7 @@ function renderAdminItemQueue() {
     .map(
       ([itemId, count]) => `
         <button type="button" class="ghost-button compact-button admin-item-chip" data-remove-admin-item="${escapeHtml(itemId)}">
-          ${escapeHtml(optionMap.get(itemId) || itemId)}${count > 1 ? ` x${count}` : ""} ×
+          ${escapeHtml(itemMap.get(itemId)?.name || itemId)}${count > 1 ? ` x${count}` : ""} ×
         </button>
       `
     )
@@ -886,6 +1096,8 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
       item.nickname === profile.nickname
   );
   const isOwnProfile = viewerProfile?.uid && viewerProfile.uid === profile.uid;
+  const factionName = String(profile.factionName || "").trim();
+  const factionThemeClass = getFactionThemeClass(factionName);
   const nicknameList = [profile.nickname, ...(Array.isArray(profile.extraNicknames) ? profile.extraNicknames : [])]
     .map((item) => String(item || "").trim())
     .filter(Boolean);
@@ -893,13 +1105,12 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
   const inventorySummary = inventoryKinds.length
     ? inventoryKinds
         .map(({ item, count }) => {
-          const icon = escapeHtml(item.icon || "🎁");
           const tooltip = escapeHtml(
             `${item.name || "이름 없는 아이템"} | ${item.description || "설명이 아직 등록되지 않았습니다."}`
           );
           return `
             <div class="profile-item-chip inventory-tooltip" data-tooltip="${tooltip}">
-              <span class="profile-item-icon">${icon}</span>
+              ${renderProfileItemVisual(item)}
               ${count > 1 ? `<span class="profile-item-count">x${count}</span>` : ""}
             </div>
           `;
@@ -908,33 +1119,34 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
     : '<span class="profile-item-empty">없음</span>';
 
   content.innerHTML = `
-    <div class="profile-lobby-card">
-      <div class="profile-lobby-glow profile-lobby-glow-a" aria-hidden="true"></div>
-      <div class="profile-lobby-glow profile-lobby-glow-b" aria-hidden="true"></div>
-      <div class="profile-lobby-gridlines" aria-hidden="true"></div>
-      <div class="profile-lobby-visual">
-        <div class="profile-seal-panel">
-          ${
-            profile.profileSealImage
-              ? `<img src="${escapeHtml(profile.profileSealImage)}" alt="프로필 인장" class="profile-seal-art" />`
-              : `<div class="profile-seal-fallback">인장</div>`
-          }
+    <div class="profile-card-stage">
+      <div class="profile-lobby-card profile-lobby-card-enter ${factionThemeClass}">
+        <div class="profile-card-frame profile-card-frame-outer" aria-hidden="true"></div>
+        <div class="profile-card-frame profile-card-frame-inner" aria-hidden="true"></div>
+        <div class="profile-lobby-visual">
+          <div class="profile-seal-panel">
+            ${
+              profile.profileSealImage
+                ? `<img src="${escapeHtml(profile.profileSealImage)}" alt="프로필 인장" class="profile-seal-art" />`
+                : `<div class="profile-seal-fallback">인장</div>`
+            }
+          </div>
         </div>
-      </div>
-      <div class="profile-lobby-meta">
-        <p class="eyebrow">PLAYER LOBBY</p>
-        <h2>${escapeHtml(profile.characterName || "-")}</h2>
-        <div class="profile-lobby-grid">
-          <div><span>작혼 닉네임</span><strong>${escapeHtml(nicknameList.join(" / ") || "-")}</strong></div>
-          <div><span>현재 랭킹 순위</span><strong>${rankEntry?.displayRank ? `${rankEntry.displayRank}위` : "-"}</strong></div>
-          <div><span>랭킹전 포인트</span><strong>${Number(profile.rankingPoints || 0)}</strong></div>
-          <div><span>총 대국 수</span><strong>${Number(profile.totalMatches || 0)}</strong></div>
-          <div><span>보유 환</span><strong>${Number(profile.currency || 0)} 환</strong></div>
-          <div><span>인벤토리 종류 수</span><strong>${inventoryKinds.length}</strong></div>
-        </div>
-        <div class="profile-lobby-traits">
-          <span>${isOwnProfile ? "보유 아이템 요약" : "공개 인벤토리 요약"}</span>
-          <div class="profile-item-summary">${inventorySummary}</div>
+        <div class="profile-lobby-meta">
+          <p class="eyebrow">PLAYER LOBBY</p>
+          <h2>${escapeHtml(profile.characterName || "-")}</h2>
+          <div class="profile-lobby-grid">
+            <div><span>작혼 닉네임</span><strong>${escapeHtml(nicknameList.join(" / ") || "-")}</strong></div>
+            <div><span>파벌</span><strong>${escapeHtml(factionName || "미설정")}</strong></div>
+            <div><span>현재 랭킹 순위</span><strong>${rankEntry?.displayRank ? `${rankEntry.displayRank}위` : "-"}</strong></div>
+            <div><span>랭킹전 포인트</span><strong>${Number(profile.rankingPoints || 0)}</strong></div>
+            <div><span>총 대국 수</span><strong>${Number(profile.totalMatches || 0)}</strong></div>
+            <div><span>보유 환</span><strong>${Number(profile.currency || 0)} 환</strong></div>
+          </div>
+          <div class="profile-lobby-traits">
+            <span>${isOwnProfile ? "보유 아이템 요약" : "공개 인벤토리 요약"}</span>
+            <div class="profile-item-summary">${inventorySummary}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -1264,7 +1476,7 @@ async function hydrateRankingPanel() {
             <td>${escapeHtml(item.nickname || "-")}</td>
             <td>${Number(item.rankingPoints || 0)}</td>
             <td>${Number(item.currency || 0)} 환</td>
-            <td>${Number(item.inventoryTypeCount || 0)}</td>
+            <td>${escapeHtml(item.factionName || "-")}</td>
           </tr>
         `;
       })
@@ -1379,7 +1591,8 @@ function attachParcelForm({ profile, onProfilePatched, onToast }) {
     }
     const countedItems = Array.from(
       selectedItems.reduce((map, item) => {
-        const label = `${item.icon || "🎁"} ${item.name || "아이템"}`;
+        const sprite = getItemSprite(item.spriteKey);
+        const label = `${sprite ? "[도트]" : item.icon || "🎁"} ${item.name || "아이템"}`;
         const existing = map.get(label) || { count: 0, item };
         existing.count += 1;
         map.set(label, existing);
@@ -1767,6 +1980,7 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
         return {
           id: `parcel-${item.id}`,
           createdAt: getSortTime(item.createdAt),
+          parcel: item,
           html: `
           <article class="info-card compact-info ${item.wrapped ? "is-unread" : ""}">
             <div class="info-card-head">
@@ -1824,9 +2038,14 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
 
     list.querySelectorAll("[data-parcel-action]").forEach((button) => {
       button.addEventListener("click", async () => {
+        const action = button.dataset.parcelAction || "";
+        const parcelId = button.dataset.parcelId || "";
+        const parcel = parcels.find((item) => item.id === parcelId) || null;
+        const shouldProceed = await confirmParcelAction(action, parcel);
+        if (!shouldProceed) return;
         try {
           await withPendingToast(onToast, () =>
-            respondParcel(button.dataset.parcelId, button.dataset.parcelAction)
+            respondParcel(parcelId, action)
           );
           const latestProfile = await refreshCurrentUserProfile().catch(() => profile);
           await onProfilePatched(latestProfile);
@@ -1929,9 +2148,15 @@ async function renderIncomingParcels({ profile, onProfilePatched, onToast }) {
 
     list.querySelectorAll("[data-parcel-action]").forEach((button) => {
       button.addEventListener("click", async () => {
+        const action = button.dataset.parcelAction || "";
+        const parcelId = button.dataset.parcelId || "";
+        const parcelCard = snapshot.docs.find((entry) => entry.id === parcelId);
+        const parcel = parcelCard ? { id: parcelCard.id, ...parcelCard.data() } : null;
+        const shouldProceed = await confirmParcelAction(action, parcel);
+        if (!shouldProceed) return;
         try {
           await withPendingToast(onToast, () =>
-            respondParcel(button.dataset.parcelId, button.dataset.parcelAction)
+            respondParcel(parcelId, action)
           );
           await onProfilePatched();
           onToast("소포 상태를 처리했습니다.");
@@ -2150,6 +2375,16 @@ function renderRouletteItemList(items, profile) {
 
   itemList.querySelectorAll("[data-roulette-remove]").forEach((button) => {
     button.addEventListener("click", async () => {
+      const row = button.closest(".roulette-item-row");
+      const rewardName = row?.querySelector("strong")?.textContent?.trim() || "룰렛 항목";
+      const shouldDelete = await openActionConfirmModal({
+        titleText: "룰렛 항목 삭제",
+        bodyText: `${rewardName} 항목을 삭제하시겠습니까?`,
+        confirmText: "삭제",
+        cancelText: "취소",
+        eyebrowText: "삭제 확인",
+      });
+      if (!shouldDelete) return;
       try {
         await withPendingToast(
           (message, isError = false) => {
@@ -2199,6 +2434,9 @@ function hydrateAdminPanel({ onProfilePatched, onToast }) {
   if (!body) return;
 
   renderAdminSection(body);
+  if (activeAdminSection === "items") {
+    renderAdminItemSection();
+  }
 
   document.querySelectorAll("[data-admin-section]").forEach((button) => {
     button.classList.toggle("active", button.dataset.adminSection === activeAdminSection);
@@ -2212,9 +2450,6 @@ function hydrateAdminPanel({ onProfilePatched, onToast }) {
   });
 
   attachAdminEvents({ onProfilePatched, onToast });
-  if (activeAdminSection === "items") {
-    renderAdminItemSection();
-  }
   if (activeAdminSection === "user-adjust") {
     void renderAdminLogTable("operate");
   }
@@ -2246,9 +2481,7 @@ function renderAdminSection(body) {
             <!-- 특성치 시스템은 개편 전까지 운영진 조정에서 제외 -->
             <label>
               <span>지급 아이템 선택</span>
-              <select name="addItemId" id="admin-item-select">
-                <option value="">아이템을 선택하세요</option>
-              </select>
+              ${buildAdminItemSelector({ inputName: "addItemId", selectorId: "admin-item-select", placeholder: "아이템을 선택하세요" })}
             </label>
             <div class="admin-item-picker-row">
               <button type="button" class="ghost-button" id="admin-add-item-button">아이템 추가</button>
@@ -2357,11 +2590,29 @@ function renderAdminItemSection() {
     create: `
       <form id="admin-item-form" class="stack-form compact-form">
         <label><span>아이템 이름</span><input type="text" name="name" placeholder="예: 결투권" required /></label>
-        <label><span>아이콘 이모지</span><input type="text" name="icon" placeholder="예: 🎁" value="🎁" /></label>
-        <label><span>카테고리</span><input type="text" name="category" placeholder="예: 소모품" /></label>
-        <label><span>짧은 설명</span><input type="text" name="shortLabel" placeholder="툴팁 요약" /></label>
-        <label><span>상세 설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
-        <label><span>상점 가격</span><input type="number" min="0" name="price" value="0" /></label>
+        <label>
+          <span>도트 선택</span>
+          ${buildItemSpritePicker({ pickerId: "admin-item-create-picker" })}
+        </label>
+        <input type="hidden" name="category" value="기타" />
+        <div class="auto-category-badge-row">
+          <span>자동 카테고리</span>
+          <div class="auto-category-actions">
+            <strong data-sprite-category-display>기타</strong>
+            <button type="button" class="ghost-button compact-button" data-category-edit-toggle>카테고리 수정</button>
+          </div>
+        </div>
+        <label class="hidden" data-category-edit-row>
+          <span>카테고리 수정</span>
+          <select name="categoryOverride">${buildCategoryOverrideOptions()}</select>
+        </label>
+        <label><span>설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
+        <label class="item-shop-toggle">
+          <input type="checkbox" name="sellInShop" />
+          <span class="item-shop-toggle-box" aria-hidden="true"></span>
+          <span>상점에 등록</span>
+        </label>
+        <label data-shop-price-row><span>상점 가격</span><input type="number" min="0" name="price" value="0" /></label>
         <button type="submit" class="primary-button">아이템 등록</button>
       </form>
     `,
@@ -2369,16 +2620,32 @@ function renderAdminItemSection() {
       <form id="admin-item-edit-form" class="stack-form compact-form">
         <label>
           <span>수정 대상 아이템</span>
-          <select name="itemId" id="admin-item-edit-select">
-            <option value="">아이템을 선택하세요</option>
-          </select>
+          ${buildAdminItemSelector({ inputName: "itemId", selectorId: "admin-item-edit-select", placeholder: "아이템을 선택하세요" })}
         </label>
         <label><span>아이템 이름</span><input type="text" name="name" placeholder="예: 결투권" required /></label>
-        <label><span>아이콘 이모지</span><input type="text" name="icon" placeholder="예: 🎁" value="🎁" /></label>
-        <label><span>카테고리</span><input type="text" name="category" placeholder="예: 소모품" /></label>
-        <label><span>짧은 설명</span><input type="text" name="shortLabel" placeholder="툴팁 요약" /></label>
-        <label><span>상세 설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
-        <label><span>상점 가격</span><input type="number" min="0" name="price" value="0" /></label>
+        <label>
+          <span>도트 선택</span>
+          ${buildItemSpritePicker({ pickerId: "admin-item-edit-picker" })}
+        </label>
+        <input type="hidden" name="category" value="기타" />
+        <div class="auto-category-badge-row">
+          <span>자동 카테고리</span>
+          <div class="auto-category-actions">
+            <strong data-sprite-category-display>기타</strong>
+            <button type="button" class="ghost-button compact-button" data-category-edit-toggle>카테고리 수정</button>
+          </div>
+        </div>
+        <label class="hidden" data-category-edit-row>
+          <span>카테고리 수정</span>
+          <select name="categoryOverride">${buildCategoryOverrideOptions()}</select>
+        </label>
+        <label><span>설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
+        <label class="item-shop-toggle">
+          <input type="checkbox" name="sellInShop" />
+          <span class="item-shop-toggle-box" aria-hidden="true"></span>
+          <span>상점에 등록</span>
+        </label>
+        <label data-shop-price-row><span>상점 가격</span><input type="number" min="0" name="price" value="0" /></label>
         <button type="submit" class="primary-button">아이템 수정</button>
       </form>
     `,
@@ -2386,9 +2653,7 @@ function renderAdminItemSection() {
       <form id="admin-item-delete-form" class="stack-form compact-form">
         <label>
           <span>삭제 대상 아이템</span>
-          <select name="itemId" id="admin-item-delete-select">
-            <option value="">아이템을 선택하세요</option>
-          </select>
+          ${buildAdminItemSelector({ inputName: "itemId", selectorId: "admin-item-delete-select", placeholder: "아이템을 선택하세요" })}
         </label>
         <button type="submit" class="ghost-button danger-button">아이템 삭제</button>
       </form>
@@ -2406,6 +2671,9 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
   const announcementForm = document.querySelector("#announcement-form");
   const deleteForm = document.querySelector("#admin-delete-form");
 
+  initializeItemSpritePickers();
+  initializeAdminItemSelectors();
+
   document.querySelectorAll("[data-admin-item-section]").forEach((button) => {
     button.classList.toggle("active", button.dataset.adminItemSection === activeAdminItemSection);
     button.onclick = () => {
@@ -2421,6 +2689,9 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
     const itemSelect = manageForm.querySelector("#admin-item-select");
     const addItemButton = manageForm.querySelector("#admin-add-item-button");
 
+    // 지급 아이템 대기열은 유저 조정 화면을 새로 열 때마다 초기화합니다.
+    // 이전 작업에서 담아둔 항목이 다음 조정에 섞여 들어가는 것을 방지합니다.
+    pendingAdminItemIds = [];
     void hydrateAdminItemOptions();
     renderAdminItemQueue();
 
@@ -2434,16 +2705,14 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
     });
 
     addItemButton?.addEventListener("click", () => {
-      const selectedId = String(itemSelect?.value || "").trim();
+      const selectedId = String(itemSelect?.querySelector("[data-item-selector-input]")?.value || "").trim();
       if (!selectedId) {
         onToast("지급할 아이템을 먼저 선택해 주세요.", true);
         return;
       }
       pendingAdminItemIds.push(selectedId);
       renderAdminItemQueue();
-      if (itemSelect) {
-        itemSelect.value = "";
-      }
+      syncAdminItemSelector(itemSelect, selectedId);
     });
 
     manageForm.addEventListener("submit", async (event) => {
@@ -2471,6 +2740,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         manageForm.reset();
         pendingAdminItemIds = [];
         renderAdminItemQueue();
+        syncAdminItemSelector(itemSelect, "");
         await onProfilePatched();
         await renderAdminLogTable("operate");
         onToast("유저 조정을 적용했습니다.");
@@ -2482,14 +2752,20 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
 
   if (itemForm) {
     void hydrateAdminItemOptions();
+    bindAdminItemMetaForm(itemForm);
     itemForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(itemForm).entries());
+      payload.sellInShop = itemForm.elements.sellInShop.checked;
 
       try {
         await withPendingToast(onToast, () => createItemDefinition(payload));
         itemForm.reset();
+        syncItemSpritePicker(itemForm.querySelector("[data-sprite-picker]"), "");
+        bindAdminItemMetaForm(itemForm, true);
+        await loadAdminItemCatalog(true);
         await hydrateAdminItemOptions();
+        refreshAdminItemSelectors({ root: document });
         onToast("아이템 DB에 새 아이템을 추가했습니다.");
       } catch (error) {
         onToast(error.message, true);
@@ -2500,11 +2776,15 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
   if (itemEditForm) {
     const editSelect = itemEditForm.querySelector("#admin-item-edit-select");
     void hydrateAdminItemOptions();
+    bindAdminItemMetaForm(itemEditForm);
 
-    editSelect?.addEventListener("change", async () => {
-      const itemId = String(editSelect.value || "").trim();
+    editSelect?.addEventListener("itemchange", async (event) => {
+      const itemId = String(event.detail?.itemId || editSelect.querySelector("[data-item-selector-input]")?.value || "").trim();
       if (!itemId) {
         itemEditForm.reset();
+        syncAdminItemSelector(editSelect, "");
+        syncItemSpritePicker(itemEditForm.querySelector("[data-sprite-picker]"), "");
+        bindAdminItemMetaForm(itemEditForm, true);
         return;
       }
       try {
@@ -2514,11 +2794,12 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         const shopItem = shopItems.find((entry) => entry.id === itemId);
         if (!item) return;
         itemEditForm.elements.name.value = item.name || "";
-        itemEditForm.elements.icon.value = item.icon || "🎁";
-        itemEditForm.elements.category.value = item.category || "";
-        itemEditForm.elements.shortLabel.value = item.shortLabel || "";
+        syncItemSpritePicker(itemEditForm.querySelector("[data-sprite-picker]"), item.spriteKey || "");
+        itemEditForm.elements.category.value = item.category || getItemSpriteCategory(item.spriteKey || "");
         itemEditForm.elements.description.value = item.description || "";
         itemEditForm.elements.price.value = String(Number(shopItem?.price || 0));
+        itemEditForm.elements.sellInShop.checked = Boolean(shopItem);
+        bindAdminItemMetaForm(itemEditForm, true);
       } catch (_error) {
         onToast("아이템 정보를 불러오지 못했습니다.", true);
       }
@@ -2527,9 +2808,15 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
     itemEditForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(itemEditForm).entries());
+      payload.sellInShop = itemEditForm.elements.sellInShop.checked;
       try {
         await withPendingToast(onToast, () => updateItemDefinition(payload));
+        await loadAdminItemCatalog(true);
         await hydrateAdminItemOptions();
+        refreshAdminItemSelectors({
+          root: document,
+          preferredValues: new Map([[editSelect?.id || "", String(payload.itemId || "").trim()]]),
+        });
         onToast("아이템 정보를 수정했습니다.");
       } catch (error) {
         onToast(error.message, true);
@@ -2547,11 +2834,20 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         onToast("삭제할 아이템을 선택해 주세요.", true);
         return;
       }
-      if (!window.confirm("선택한 아이템을 삭제할까요?")) return;
+      const shouldDelete = await openActionConfirmModal({
+        titleText: "아이템 삭제",
+        bodyText: "선택한 아이템을 삭제하시겠습니까?",
+        confirmText: "삭제",
+        cancelText: "취소",
+        eyebrowText: "삭제 확인",
+      });
+      if (!shouldDelete) return;
       try {
         await withPendingToast(onToast, () => deleteItemDefinition(itemId));
         itemDeleteForm.reset();
+        await loadAdminItemCatalog(true);
         await hydrateAdminItemOptions();
+        refreshAdminItemSelectors({ root: document });
         onToast("아이템을 삭제했습니다.");
       } catch (error) {
         onToast(error.message, true);
@@ -2581,7 +2877,14 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(deleteForm).entries());
 
-      if (!window.confirm(`${payload.characterName} 계정을 삭제할까요?`)) return;
+      const shouldDelete = await openActionConfirmModal({
+        titleText: "계정 삭제",
+        bodyText: `${payload.characterName} 계정을 삭제하시겠습니까?`,
+        confirmText: "삭제",
+        cancelText: "취소",
+        eyebrowText: "삭제 확인",
+      });
+      if (!shouldDelete) return;
 
       try {
         await withPendingToast(onToast, () => adminDeleteUser(payload.characterName));
@@ -2799,6 +3102,8 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
   const addWrap = modal.querySelector("#member-profile-add-wrap");
   const addInput = modal.querySelector('input[name="newExtraNickname"]');
   const addConfirm = modal.querySelector("#member-profile-add-confirm");
+  const friendCodeInput = modal.querySelector('input[name="friendCode"]');
+  const factionSelect = modal.querySelector('select[name="factionName"]');
   const currentPasswordInput = modal.querySelector('input[name="currentPassword"]');
   const nextPasswordInput = modal.querySelector('input[name="nextPassword"]');
   const nextPasswordConfirmInput = modal.querySelector('input[name="nextPasswordConfirm"]');
@@ -2812,6 +3117,8 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
     !addWrap ||
     !addInput ||
     !addConfirm ||
+    !friendCodeInput ||
+    !factionSelect ||
     !currentPasswordInput ||
     !nextPasswordInput ||
     !nextPasswordConfirmInput ||
@@ -2824,6 +3131,8 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
   let pendingExtraNicknames = Array.isArray(profile.extraNicknames) ? [...profile.extraNicknames] : [];
   form.reset();
   nicknameDisplay.value = String(profile.nickname || "");
+  friendCodeInput.value = String(profile.friendCode || "");
+  factionSelect.value = String(profile.factionName || "");
   addWrap.classList.add("hidden");
   addInput.value = "";
   currentPasswordInput.value = "";
@@ -2904,6 +3213,8 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
       const updatedProfile = await updateMemberProfile({
         nickname: payload.nickname,
         extraNicknames: pendingExtraNicknames,
+        friendCode: payload.friendCode,
+        factionName: payload.factionName,
       });
       close();
       await onProfilePatched(updatedProfile);
@@ -2950,6 +3261,20 @@ function ensureMemberProfileEditModal() {
           </label>
           <button id="member-profile-add-confirm" type="button" class="primary-button">닉네임 추가</button>
         </div>
+        <label>
+          <span>친구 코드</span>
+          <input type="text" name="friendCode" inputmode="numeric" pattern="[0-9]*" placeholder="숫자만 입력" />
+        </label>
+        <label>
+          <span>파벌 이름</span>
+          <select name="factionName">
+            <option value="">파벌을 선택하세요</option>
+            <option value="매화">매화</option>
+            <option value="난초">난초</option>
+            <option value="국화">국화</option>
+            <option value="대나무">대나무</option>
+          </select>
+        </label>
         <label>
           <span>현재 비밀번호</span>
           <input type="password" name="currentPassword" placeholder="현재 비밀번호" />
@@ -3033,7 +3358,6 @@ function ensureItemUseResultModal() {
   modal.innerHTML = `
     <div class="modal-panel item-use-result-panel">
       <div class="item-use-card">
-        <div class="item-use-ribbons" aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="modal-head item-use-head">
           <div>
             <p class="eyebrow">ITEM RESULT</p>
@@ -3056,19 +3380,29 @@ function ensureItemUseResultModal() {
   return modal;
 }
 
-async function confirmInventoryItemUse(item) {
+async function openActionConfirmModal({
+  titleText = "확인",
+  bodyText = "",
+  confirmText = "확인",
+  cancelText = "취소",
+  eyebrowText = "작업 확인",
+} = {}) {
   const modal = ensureInventoryUseConfirmModal();
+  const eyebrow = modal.querySelector("#inventory-use-confirm-eyebrow");
   const title = modal.querySelector("#inventory-use-confirm-title");
   const body = modal.querySelector("#inventory-use-confirm-body");
   const confirmButton = modal.querySelector("#inventory-use-confirm-ok");
   const cancelButton = modal.querySelector("#inventory-use-confirm-cancel");
   const closeIcon = modal.querySelector("#inventory-use-confirm-close");
-  if (!title || !body || !confirmButton || !cancelButton || !closeIcon) {
+  if (!eyebrow || !title || !body || !confirmButton || !cancelButton || !closeIcon) {
     return false;
   }
 
-  title.textContent = item?.name || "아이템 사용";
-  body.textContent = `'${item?.name || "아이템"}' 을(를) 사용하시겠습니까?`;
+  eyebrow.textContent = eyebrowText;
+  title.textContent = titleText;
+  body.textContent = bodyText;
+  confirmButton.textContent = confirmText;
+  cancelButton.textContent = cancelText;
   modal.classList.remove("hidden");
 
   return await new Promise((resolve) => {
@@ -3094,6 +3428,46 @@ async function confirmInventoryItemUse(item) {
   });
 }
 
+async function confirmParcelAction(action, parcel = null) {
+  const normalizedAction = String(action || "").trim();
+  const senderName = parcel?.senderCharacterName || "소포";
+  if (normalizedAction === "accept") {
+    return openActionConfirmModal({
+      titleText: "소포 수령",
+      bodyText: `${senderName} 님의 소포를 수령하시겠습니까?`,
+      confirmText: "수령",
+      cancelText: "취소",
+      eyebrowText: "소포 확인",
+    });
+  }
+  if (normalizedAction === "reject") {
+    return openActionConfirmModal({
+      titleText: "소포 거절",
+      bodyText: `${senderName} 님의 소포를 거절하시겠습니까?`,
+      confirmText: "거절",
+      cancelText: "취소",
+      eyebrowText: "소포 확인",
+    });
+  }
+  return openActionConfirmModal({
+    titleText: "소포 처리",
+    bodyText: "소포 상태를 변경하시겠습니까?",
+    confirmText: "확인",
+    cancelText: "취소",
+    eyebrowText: "소포 확인",
+  });
+}
+
+async function confirmInventoryItemUse(item) {
+  return openActionConfirmModal({
+    titleText: item?.name || "아이템 사용",
+    bodyText: `'${item?.name || "아이템"}' 을(를) 사용하시겠습니까?`,
+    confirmText: "사용",
+    cancelText: "취소",
+    eyebrowText: "아이템 확인",
+  });
+}
+
 function ensureInventoryUseConfirmModal() {
   let modal = document.querySelector("#inventory-use-confirm-modal");
   if (modal) return modal;
@@ -3105,7 +3479,7 @@ function ensureInventoryUseConfirmModal() {
     <div class="modal-panel inventory-use-confirm-panel">
       <div class="modal-head">
         <div>
-          <p class="eyebrow">ITEM CONFIRM</p>
+          <p class="eyebrow" id="inventory-use-confirm-eyebrow">아이템 확인</p>
           <h2 id="inventory-use-confirm-title">아이템 사용</h2>
         </div>
         <button id="inventory-use-confirm-close" type="button" class="icon-button">x</button>
@@ -3114,8 +3488,8 @@ function ensureInventoryUseConfirmModal() {
         <p id="inventory-use-confirm-body"></p>
       </div>
       <div class="notice-modal-actions">
-        <button id="inventory-use-confirm-cancel" type="button" class="ghost-button">취소</button>
         <button id="inventory-use-confirm-ok" type="button" class="primary-button">사용</button>
+        <button id="inventory-use-confirm-cancel" type="button" class="ghost-button">취소</button>
       </div>
     </div>
   `;
@@ -3460,6 +3834,392 @@ function buildInventoryGroupKey(item) {
   return [item?.itemId || item?.name || "item", item?.name || "", item?.description || ""].join("::");
 }
 
+function renderProfileItemVisual(item) {
+  const sprite = getItemSprite(item?.spriteKey);
+  if (sprite) {
+    return `<img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="profile-item-icon profile-item-icon-image" loading="lazy" />`;
+  }
+  return `<span class="profile-item-icon">${escapeHtml(item?.icon || sprite?.fallbackIcon || "🎁")}</span>`;
+}
+
+function buildAdminItemSelector({ inputName, selectorId, placeholder = "아이템을 선택하세요" }) {
+  return `
+    <div class="item-selector" data-admin-item-selector id="${escapeHtml(selectorId)}" data-placeholder="${escapeHtml(placeholder)}">
+      <input type="hidden" name="${escapeHtml(inputName)}" value="" data-item-selector-input />
+      <button type="button" class="item-selector-trigger" data-item-selector-trigger aria-expanded="false">
+        <span class="item-selector-value" data-item-selector-value>
+          <span class="item-selector-label muted" data-item-selector-label>${escapeHtml(placeholder)}</span>
+        </span>
+        <span class="item-selector-arrow" aria-hidden="true">▾</span>
+      </button>
+      <div class="item-selector-menu hidden" data-item-selector-menu role="listbox"></div>
+    </div>
+  `;
+}
+
+function buildAdminItemSelectorOption(item, isSelected) {
+  return `
+    <button
+      type="button"
+      class="item-selector-option ${isSelected ? "active" : ""}"
+      data-item-selector-option="${escapeHtml(item.id)}"
+      role="option"
+      aria-selected="${isSelected ? "true" : "false"}"
+    >
+      <span class="item-selector-option-visual">${renderItemVisual(item)}</span>
+      <span class="item-selector-option-copy">
+        <strong>${escapeHtml(item.name || item.id)}</strong>
+        <small>${escapeHtml(normalizeSpriteCategory(item.category || "기타 아이템"))}</small>
+      </span>
+    </button>
+  `;
+}
+
+function handleAdminItemSelection(selector, nextItemId) {
+  if (!selector) return;
+  syncAdminItemSelector(selector, nextItemId);
+  selector.dispatchEvent(new CustomEvent("itemchange", { bubbles: true, detail: { itemId: String(nextItemId || "").trim() } }));
+}
+
+function bindAdminItemSelectorMenu(selector) {
+  if (!selector || selector.dataset.menuBound === "true") return;
+  selector.dataset.menuBound = "true";
+  const menu = selector.querySelector("[data-item-selector-menu]");
+  if (!menu) return;
+
+  menu.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-item-selector-option]");
+    if (!option || !menu.contains(option)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    handleAdminItemSelection(selector, option.dataset.itemSelectorOption || "");
+  });
+}
+
+function syncAdminItemSelector(selector, itemId) {
+  if (!selector) return;
+
+  const hiddenInput = selector.querySelector("[data-item-selector-input]");
+  const valueBox = selector.querySelector("[data-item-selector-value]");
+  const menu = selector.querySelector("[data-item-selector-menu]");
+  const trigger = selector.querySelector("[data-item-selector-trigger]");
+  if (!hiddenInput || !valueBox || !menu || !trigger) return;
+
+  const placeholder = selector.dataset.placeholder || "아이템을 선택하세요";
+  const normalizedItemId = String(itemId || "").trim();
+  const selectedItem = adminItemCatalogCache.find((item) => item.id === normalizedItemId) || null;
+  hiddenInput.value = selectedItem ? normalizedItemId : "";
+
+  valueBox.innerHTML = selectedItem
+    ? `
+      <span class="item-selector-selected-visual">${renderItemVisual(selectedItem)}</span>
+      <span class="item-selector-selected-copy">
+        <strong>${escapeHtml(selectedItem.name || selectedItem.id)}</strong>
+        <small>${escapeHtml(normalizeSpriteCategory(selectedItem.category || "기타 아이템"))}</small>
+      </span>
+    `
+    : `<span class="item-selector-label muted" data-item-selector-label>${escapeHtml(placeholder)}</span>`;
+
+  menu.innerHTML = adminItemCatalogCache.length
+    ? adminItemCatalogCache.map((item) => buildAdminItemSelectorOption(item, item.id === normalizedItemId)).join("")
+    : '<div class="item-selector-empty">표시할 아이템이 없습니다.</div>';
+
+  bindAdminItemSelectorMenu(selector);
+  menu.classList.add("hidden");
+  trigger.classList.remove("is-open");
+  trigger.setAttribute("aria-expanded", "false");
+}
+
+function initializeAdminItemSelectors(root = document) {
+  root.querySelectorAll("[data-admin-item-selector]").forEach((selector) => {
+    if (selector.dataset.bound === "true") return;
+    selector.dataset.bound = "true";
+
+    const trigger = selector.querySelector("[data-item-selector-trigger]");
+    const menu = selector.querySelector("[data-item-selector-menu]");
+
+    bindAdminItemSelectorMenu(selector);
+
+    trigger?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const isOpen = !menu?.classList.contains("hidden");
+      document.querySelectorAll("[data-item-selector-menu]").forEach((entry) => entry.classList.add("hidden"));
+      document.querySelectorAll("[data-item-selector-trigger]").forEach((entry) => {
+        entry.classList.remove("is-open");
+        entry.setAttribute("aria-expanded", "false");
+      });
+      if (!isOpen && menu) {
+        menu.classList.remove("hidden");
+        trigger.classList.add("is-open");
+        trigger.setAttribute("aria-expanded", "true");
+      }
+    });
+  });
+
+  if (!document.body.dataset.itemSelectorOutsideBound) {
+    document.body.dataset.itemSelectorOutsideBound = "true";
+    document.addEventListener("click", (event) => {
+      if (event.target.closest("[data-admin-item-selector]")) return;
+      document.querySelectorAll("[data-item-selector-menu]").forEach((entry) => entry.classList.add("hidden"));
+      document.querySelectorAll("[data-item-selector-trigger]").forEach((entry) => {
+        entry.classList.remove("is-open");
+        entry.setAttribute("aria-expanded", "false");
+      });
+    });
+  }
+}
+
+function buildCategoryOverrideOptions(selectedValue = "") {
+  const normalizedSelected = normalizeSpriteCategory(selectedValue || "기타 아이템");
+  return itemSpriteCategories
+    .map((category) => {
+      const selected = category === normalizedSelected ? "selected" : "";
+      return `<option value="${escapeHtml(category)}" ${selected}>${escapeHtml(category)}</option>`;
+    })
+    .join("");
+}
+
+function bindAdminItemMetaForm(form, forceRefresh = false) {
+  if (!form) return;
+  if (form.dataset.metaBound === "true" && !forceRefresh) return;
+
+  const picker = form.querySelector("[data-sprite-picker]");
+  const hiddenSpriteInput = picker?.querySelector("[data-sprite-hidden]");
+  const categoryInput = form.elements.category;
+  const categoryDisplay = form.querySelector("[data-sprite-category-display]");
+  const categoryEditToggle = form.querySelector("[data-category-edit-toggle]");
+  const categoryEditRow = form.querySelector("[data-category-edit-row]");
+  const categoryOverrideSelect = form.elements.categoryOverride;
+  const sellInShopCheckbox = form.elements.sellInShop;
+  const priceRow = form.querySelector("[data-shop-price-row]");
+  const priceInput = form.elements.price;
+
+  const syncCategory = () => {
+    const autoCategory = getItemSpriteCategory(hiddenSpriteInput?.value || "");
+    const manualCategory = String(categoryOverrideSelect?.value || "").trim();
+    const category = form.dataset.categoryMode === "manual" && manualCategory
+      ? normalizeSpriteCategory(manualCategory)
+      : autoCategory;
+    if (categoryInput) {
+      categoryInput.value = category;
+    }
+    if (categoryDisplay) {
+      categoryDisplay.textContent = category;
+    }
+    if (categoryOverrideSelect && form.dataset.categoryMode !== "manual") {
+      categoryOverrideSelect.innerHTML = buildCategoryOverrideOptions(autoCategory);
+    }
+  };
+
+  const syncShopRow = () => {
+    const enabled = Boolean(sellInShopCheckbox?.checked);
+    priceRow?.classList.toggle("is-disabled", !enabled);
+    if (priceInput) {
+      priceInput.disabled = !enabled;
+      if (!enabled && !forceRefresh) {
+        priceInput.value = "0";
+      }
+    }
+  };
+
+  syncCategory();
+  syncShopRow();
+
+  if (form.dataset.metaBound !== "true") {
+    picker?.addEventListener("spritechange", syncCategory);
+    categoryEditToggle?.addEventListener("click", () => {
+      const isManual = form.dataset.categoryMode === "manual";
+      form.dataset.categoryMode = isManual ? "auto" : "manual";
+      categoryEditRow?.classList.toggle("hidden", isManual);
+      if (!isManual && categoryOverrideSelect) {
+        categoryOverrideSelect.innerHTML = buildCategoryOverrideOptions(categoryInput?.value || "기타");
+      }
+      if (categoryEditToggle) {
+        categoryEditToggle.textContent = isManual ? "카테고리 수정" : "자동 카테고리 사용";
+      }
+      syncCategory();
+    });
+    categoryOverrideSelect?.addEventListener("change", syncCategory);
+    sellInShopCheckbox?.addEventListener("change", syncShopRow);
+    form.dataset.metaBound = "true";
+  }
+
+  if (forceRefresh) {
+    form.dataset.categoryMode = "auto";
+    categoryEditRow?.classList.add("hidden");
+    if (categoryEditToggle) {
+      categoryEditToggle.textContent = "카테고리 수정";
+    }
+    syncCategory();
+    syncShopRow();
+  }
+}
+
+function initializeItemSpritePickers(root = document) {
+  root.querySelectorAll("[data-sprite-picker]").forEach((picker) => {
+    if (picker.dataset.bound === "true") return;
+    picker.dataset.bound = "true";
+
+    const hiddenInput = picker.querySelector("[data-sprite-hidden]");
+    const searchInput = picker.querySelector("[data-sprite-search-input]");
+    const selection = picker.querySelector("[data-sprite-selection]");
+    const emptyState = picker.querySelector("[data-sprite-empty]");
+
+    const getOptionButtons = () => Array.from(picker.querySelectorAll("[data-sprite-key]"));
+    const getFilterButtons = () => Array.from(picker.querySelectorAll("[data-sprite-filter-category]"));
+
+    const emitSpriteChange = () => {
+      picker.dispatchEvent(new CustomEvent("spritechange", { bubbles: true }));
+    };
+
+    const renderSelection = () => {
+      const sprite = getItemSprite(hiddenInput?.value);
+      if (!selection) return;
+
+      if (!sprite) {
+        selection.innerHTML = '<span class="sprite-picker-selection-empty">선택된 도트가 없습니다.</span>';
+        return;
+      }
+
+      selection.innerHTML = `
+        <div class="sprite-picker-selected-card">
+          <span class="sprite-picker-selected-thumb">
+            <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(sprite.label)}" class="sprite-picker-selected-image" loading="lazy" />
+          </span>
+          <span class="sprite-picker-selected-copy">
+            <strong>${escapeHtml(sprite.label)}</strong>
+            <small>${escapeHtml(normalizeSpriteCategory(sprite.category || "기타"))}</small>
+          </span>
+          <button type="button" class="sprite-picker-clear" data-sprite-clear>선택 해제</button>
+        </div>
+      `;
+    };
+
+    const renderVisibleOptions = () => {
+      const optionButtons = getOptionButtons();
+      const filterButtons = getFilterButtons();
+      const currentCategory =
+        filterButtons.find((button) => button.classList.contains("active"))?.dataset.spriteFilterCategory || "";
+      const searchText = String(searchInput?.value || "").trim().toLowerCase();
+      let visibleCount = 0;
+
+      optionButtons.forEach((button) => {
+        const matchesCategory = !currentCategory || button.dataset.spriteCategory === currentCategory;
+        const matchesSearch = !searchText || String(button.dataset.spriteSearch || "").includes(searchText);
+        const isVisible = matchesCategory && matchesSearch;
+        button.classList.toggle("hidden", !isVisible);
+        if (isVisible) {
+          visibleCount += 1;
+        }
+      });
+
+      emptyState?.classList.toggle("hidden", visibleCount > 0);
+    };
+
+    const syncActiveOption = () => {
+      const selectedKey = String(hiddenInput?.value || "");
+      const optionButtons = getOptionButtons();
+      optionButtons.forEach((button) => {
+        const isActive = button.dataset.spriteKey === selectedKey;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
+      });
+      renderSelection();
+    };
+
+    searchInput?.addEventListener("input", () => {
+      renderVisibleOptions();
+    });
+
+    const handlePickerAction = (event) => {
+      const clearButton = event.target.closest("[data-sprite-clear]");
+      if (clearButton) {
+        event.preventDefault();
+        if (hiddenInput) {
+          hiddenInput.value = "";
+        }
+        syncActiveOption();
+        emitSpriteChange();
+        return;
+      }
+
+      const filterButton = event.target.closest("[data-sprite-filter-category]");
+      if (filterButton) {
+        event.preventDefault();
+        getFilterButtons().forEach((entry) => entry.classList.toggle("active", entry === filterButton));
+        renderVisibleOptions();
+        return;
+      }
+
+      const optionButton = event.target.closest("[data-sprite-key]");
+      if (optionButton) {
+        event.preventDefault();
+        if (hiddenInput) {
+          hiddenInput.value = optionButton.dataset.spriteKey || "";
+        }
+        syncActiveOption();
+        emitSpriteChange();
+      }
+    };
+
+    picker.addEventListener("click", handlePickerAction);
+
+    syncActiveOption();
+    renderVisibleOptions();
+  });
+}
+
+function syncItemSpritePicker(picker, spriteKey) {
+  if (!picker) return;
+  const hiddenInput = picker.querySelector("[data-sprite-hidden]");
+  if (!hiddenInput) return;
+  hiddenInput.value = String(spriteKey || "").trim();
+
+  const searchInput = picker.querySelector("[data-sprite-search-input]");
+  const selection = picker.querySelector("[data-sprite-selection]");
+  const emptyState = picker.querySelector("[data-sprite-empty]");
+  const optionButtons = Array.from(picker.querySelectorAll("[data-sprite-key]"));
+  const filterButtons = Array.from(picker.querySelectorAll("[data-sprite-filter-category]"));
+  const selectedSprite = getItemSprite(hiddenInput.value);
+
+  if (searchInput) {
+    searchInput.value = "";
+  }
+
+  filterButtons.forEach((button, index) => {
+    button.classList.toggle("active", index === 0);
+  });
+
+  optionButtons.forEach((button) => {
+    const isActive = button.dataset.spriteKey === hiddenInput.value;
+    button.classList.toggle("active", isActive);
+    button.classList.remove("hidden");
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+
+  emptyState?.classList.add("hidden");
+
+  if (selection) {
+    selection.innerHTML = selectedSprite
+      ? `
+        <div class="sprite-picker-selected-card">
+          <span class="sprite-picker-selected-thumb">
+            <img src="${escapeHtml(getItemSpriteUrl(selectedSprite))}" alt="${escapeHtml(selectedSprite.label)}" class="sprite-picker-selected-image" loading="lazy" />
+          </span>
+          <span class="sprite-picker-selected-copy">
+            <strong>${escapeHtml(selectedSprite.label)}</strong>
+            <small>${escapeHtml(normalizeSpriteCategory(selectedSprite.category || "기타"))}</small>
+          </span>
+          <button type="button" class="sprite-picker-clear" data-sprite-clear>선택 해제</button>
+        </div>
+      `
+      : '<span class="sprite-picker-selection-empty">선택된 도트가 없습니다.</span>';
+  }
+
+  picker.dispatchEvent(new CustomEvent("spritechange", { bubbles: true }));
+}
+
 function buildDisplayRankings(rankings) {
   const sorted = [...(Array.isArray(rankings) ? rankings : [])].sort((left, right) => {
     const pointDiff = Number(right.rankingPoints || 0) - Number(left.rankingPoints || 0);
@@ -3477,6 +4237,15 @@ function buildDisplayRankings(rankings) {
     lastDisplayRank = displayRank;
     return { ...item, displayRank };
   });
+}
+
+function getFactionThemeClass(factionName) {
+  const normalizedFactionName = String(factionName || "").trim();
+  if (normalizedFactionName === "매화") return "faction-theme-maehwa";
+  if (normalizedFactionName === "난초") return "faction-theme-nancho";
+  if (normalizedFactionName === "국화") return "faction-theme-gukhwa";
+  if (normalizedFactionName === "대나무") return "faction-theme-daenamu";
+  return "faction-theme-neutral";
 }
 
 async function loadImageFromFile(file) {

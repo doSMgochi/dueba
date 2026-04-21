@@ -1,4 +1,4 @@
-import {
+﻿import {
   EmailAuthProvider,
   createUserWithEmailAndPassword,
   fetchSignInMethodsForEmail,
@@ -42,6 +42,7 @@ const respondParcelCallable = httpsCallable(functions, "respondParcel");
 const useInventoryItemCallable = httpsCallable(functions, "useInventoryItem");
 const listAdminLogsCallable = httpsCallable(functions, "listAdminLogs");
 const listBugReportsCallable = httpsCallable(functions, "listBugReports");
+const allowedFactions = ["매화", "난초", "국화", "대나무"];
 
 function normalizeLoginId(loginId) {
   return String(loginId || "").trim().toLowerCase();
@@ -55,13 +56,26 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
-function buildDefaultProfile({ uid, loginId, email, nickname, characterName }) {
+function normalizeFriendCode(friendCode) {
+  return String(friendCode || "").replace(/\D/g, "").trim();
+}
+
+function normalizeFactionName(factionName) {
+  const normalizedFactionName = String(factionName || "").trim();
+  return allowedFactions.includes(normalizedFactionName) ? normalizedFactionName : "";
+}
+
+function buildDefaultProfile({ uid, loginId, email, nickname, characterName, friendCode = "", factionName = "" }) {
   return {
     uid,
     loginId,
     email: normalizeEmail(email),
     nickname: String(nickname || "").trim(),
     characterName: normalizeCharacterName(characterName),
+    friendCode: normalizeFriendCode(friendCode),
+    factionName: normalizeFactionName(factionName),
+    teamEnrollmentStatus: "pending",
+    teamEnrollmentMessage: "",
     role: "user",
     rankingPoints: 0,
     selectedTraitIds: [],
@@ -100,7 +114,7 @@ function toFriendlyError(error) {
     "auth/invalid-email": "이메일 형식이 올바르지 않습니다.",
     "auth/invalid-credential": "아이디 또는 비밀번호가 올바르지 않습니다.",
     "auth/missing-password": "비밀번호를 입력해 주세요.",
-    "auth/user-not-found": "가입된 계정을 찾지 못했습니다.",
+    "auth/user-not-found": "가입한 계정을 찾지 못했습니다.",
     "auth/too-many-requests": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
     "functions/not-found": "대상을 찾지 못했습니다.",
     "functions/invalid-argument": "입력값을 다시 확인해 주세요.",
@@ -118,18 +132,6 @@ function toFriendlyError(error) {
 }
 
 async function findUserProfileByUid(uid) {
-  try {
-    const legacySnapshot = await getDoc(doc(db, "users", uid));
-    if (legacySnapshot.exists()) {
-      return {
-        id: legacySnapshot.id,
-        data: legacySnapshot.data(),
-      };
-    }
-  } catch (_error) {
-    // Ignore permission failures for legacy doc ids and continue with uid query.
-  }
-
   const profileQuery = query(collection(db, "users"), where("uid", "==", uid), limit(1));
   const profileSnapshot = await getDocs(profileQuery);
 
@@ -139,6 +141,18 @@ async function findUserProfileByUid(uid) {
       id: matchedDoc.id,
       data: matchedDoc.data(),
     };
+  }
+
+  try {
+    const legacySnapshot = await getDoc(doc(db, "users", uid));
+    if (legacySnapshot.exists()) {
+      return {
+        id: legacySnapshot.id,
+        data: legacySnapshot.data(),
+      };
+    }
+  } catch (_error) {
+    // Ignore permission failures for legacy doc ids.
   }
 
   return null;
@@ -154,6 +168,8 @@ async function createProfileFallback(uid, payload) {
       loginId: payload.loginId,
       nickname: payload.nickname,
       characterName,
+      friendCode: payload.friendCode,
+      factionName: payload.factionName,
     }),
     { merge: true }
   );
@@ -183,15 +199,27 @@ async function ensureBootstrapProfileForCurrentUser() {
   };
 }
 
-export async function signUpWithProfile({ loginId, email, nickname, characterName, password }) {
+export async function signUpWithProfile({
+  loginId,
+  email,
+  nickname,
+  characterName,
+  friendCode,
+  factionName,
+  password,
+}) {
   const normalizedLoginId = normalizeLoginId(loginId);
   const normalizedEmail = normalizeEmail(email);
   const normalizedCharacterName = normalizeCharacterName(characterName);
+  const normalizedFriendCode = normalizeFriendCode(friendCode);
+  const normalizedFactionName = normalizeFactionName(factionName);
   const payload = {
     loginId: normalizedLoginId,
     email: normalizedEmail,
     nickname,
     characterName: normalizedCharacterName,
+    friendCode: normalizedFriendCode,
+    factionName: normalizedFactionName,
   };
 
   if (normalizedCharacterName.includes("/")) {
@@ -203,6 +231,8 @@ export async function signUpWithProfile({ loginId, email, nickname, characterNam
       loginId: normalizedLoginId,
       email: normalizedEmail,
       characterName: normalizedCharacterName,
+      friendCode: normalizedFriendCode,
+      factionName: normalizedFactionName,
     });
 
     const existingMethods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
@@ -223,7 +253,7 @@ export async function loginWithId(loginId, password) {
     const result = await resolveLoginEmailCallable({ loginId: normalizeLoginId(loginId) });
     const email = normalizeEmail(result.data?.email || "");
     if (!email) {
-      throw new Error("가입된 계정을 찾지 못했습니다.");
+      throw new Error("가입한 계정을 찾지 못했습니다.");
     }
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     return userCredential.user;
@@ -311,9 +341,21 @@ export async function getRankingBoard() {
       traitSnapshot.docs.map((item) => [item.id, Number(item.data().requiredPoints || 0)])
     );
 
-    return userSnapshot.docs
-      .map((item) => {
+    const preferredUsers = Array.from(
+      userSnapshot.docs.reduce((map, item) => {
         const data = item.data();
+        const key = String(data.uid || item.id || "").trim();
+        const current = map.get(key);
+        const score = item.id === data.characterName ? 2 : item.id !== data.uid ? 1 : 0;
+        if (!current || score > current.score) {
+          map.set(key, { score, item, data });
+        }
+        return map;
+      }, new Map()).values()
+    );
+
+    return preferredUsers
+      .map(({ item, data }) => {
         const selectedTraitIds = Array.isArray(data.selectedTraitIds) ? data.selectedTraitIds : [];
         const usedTraitPoints = selectedTraitIds.reduce(
           (sum, traitId) => sum + Number(traitPointMap.get(traitId) || 0),
@@ -326,6 +368,7 @@ export async function getRankingBoard() {
           nickname: data.nickname || "-",
           rankingPoints: Number(data.rankingPoints || 0),
           currency: Number(data.currency || 0),
+          factionName: String(data.factionName || "").trim(),
           inventoryTypeCount: Array.from(
             new Set(
               (Array.isArray(data.inventory) ? data.inventory : [])
@@ -471,7 +514,12 @@ export async function updateProfileSealImage(profileSealImage) {
   }
 }
 
-export async function updateMemberProfile({ nickname = "", extraNicknames = [] }) {
+export async function updateMemberProfile({
+  nickname = "",
+  extraNicknames = [],
+  friendCode = "",
+  factionName = "",
+}) {
   try {
     if (!auth.currentUser) {
       throw new Error("로그인한 유저가 없습니다.");
@@ -486,14 +534,26 @@ export async function updateMemberProfile({ nickname = "", extraNicknames = [] }
     const normalizedExtraNicknames = Array.isArray(extraNicknames)
       ? extraNicknames.map((item) => String(item || "").trim()).filter(Boolean)
       : [];
+    const normalizedFriendCode = normalizeFriendCode(friendCode);
+    const normalizedFactionName = normalizeFactionName(factionName);
 
     if (!normalizedNickname) {
       throw new Error("대표 작혼 닉네임을 입력해 주세요.");
     }
 
+    if (!normalizedFriendCode) {
+      throw new Error("친구코드는 숫자만 입력해 주세요.");
+    }
+
+    if (!normalizedFactionName) {
+      throw new Error("파벌 이름을 선택해 주세요.");
+    }
+
     await updateDoc(doc(db, "users", profile.id), {
       nickname: normalizedNickname,
       extraNicknames: normalizedExtraNicknames,
+      friendCode: normalizedFriendCode,
+      factionName: normalizedFactionName,
       updatedAt: serverTimestamp(),
     });
 
@@ -502,6 +562,8 @@ export async function updateMemberProfile({ nickname = "", extraNicknames = [] }
       ...profile.data,
       nickname: normalizedNickname,
       extraNicknames: normalizedExtraNicknames,
+      friendCode: normalizedFriendCode,
+      factionName: normalizedFactionName,
     };
   } catch (error) {
     throw toFriendlyError(error);
@@ -582,3 +644,4 @@ export async function listAdminLogs({ kind, page = 0, pageSize = 5 }) {
     throw toFriendlyError(error);
   }
 }
+

@@ -11,69 +11,16 @@ setGlobalOptions({ region: "asia-northeast3", maxInstances: 10 });
 const db = getFirestore();
 const adminAuth = getAuth();
 
-const defaultShopItems = [
-  {
-    id: "special-table-ticket",
-    name: "특수작탁개설권",
-    description: "특수 룰의 작탁을 개설할 수 있는 권한 아이템.",
-    price: 1500,
-    sortOrder: 1,
-  },
-  {
-    id: "duel-ticket",
-    name: "결투권",
-    description: "지정 대상과 결투 매치를 생성하는 입장권.",
-    price: 900,
-    sortOrder: 2,
-  },
-  {
-    id: "wrapping-paper",
-    name: "포장지",
-    description: "소포 발송 때 사용할 수 있는 포장 아이템.",
-    price: 120,
-    sortOrder: 3,
-  },
-];
-
-const defaultItemDatabase = [
-  {
-    id: "special-table-ticket",
-    name: "특수작탁개설권",
-    description: "특수 룰의 작탁을 개설할 수 있는 권한 아이템.",
-    shortLabel: "작탁 개설",
-    icon: "🎫",
-    category: "권한",
-    sortOrder: 1,
-  },
-  {
-    id: "duel-ticket",
-    name: "결투권",
-    description: "지정 대상과 결투 매치를 생성하는 입장권.",
-    shortLabel: "결투 개시",
-    icon: "⚔️",
-    category: "권한",
-    sortOrder: 2,
-  },
-  {
-    id: "wrapping-paper",
-    name: "포장지",
-    description: "소포 내용을 숨기는 포장 아이템.",
-    shortLabel: "내용물 숨김",
-    icon: "🎁",
-    category: "소모품",
-    sortOrder: 3,
-  },
-];
-
 const defaultTraits = [
   { id: "pinfu-win", name: "핑후로 화료", successPoints: 5, failPoints: 3, requiredPoints: 10, sortOrder: 1 },
   { id: "wait-36-win", name: "36통 대기로 화료", successPoints: 10, failPoints: 5, requiredPoints: 2, sortOrder: 2 },
   { id: "kokushi-win", name: "국사무쌍으로 화료", successPoints: 20, failPoints: 5, requiredPoints: 1, sortOrder: 3 },
   { id: "hidden-trait", name: "특성 비공개", successPoints: 0, failPoints: 0, requiredPoints: 10, sortOrder: 4 },
 ];
+const allowedFactions = new Set(["매화", "난초", "국화", "대나무"]);
 exports.ensureUserProfile = onCall(async (request) => {
   assertAuthenticated(request);
-  const { loginId, nickname, characterName } = request.data || {};
+  const { loginId, nickname, characterName, friendCode = "", factionName = "" } = request.data || {};
   validateProfileInput({ loginId, nickname, characterName });
   await ensureGlobalGameData();
 
@@ -98,6 +45,10 @@ exports.ensureUserProfile = onCall(async (request) => {
       email: String(request.auth.token.email || "").trim().toLowerCase(),
       nickname,
       characterName: normalizedCharacterName,
+      friendCode: String(friendCode || "").replace(/\D/g, ""),
+      factionName: allowedFactions.has(String(factionName || "").trim()) ? String(factionName || "").trim() : "",
+      teamEnrollmentStatus: "pending",
+      teamEnrollmentMessage: "",
       role: "user",
       rankingPoints: 0,
       selectedTraitIds: [],
@@ -115,13 +66,23 @@ exports.ensureUserProfile = onCall(async (request) => {
 });
 
 exports.validateSignupProfile = onCall(async (request) => {
-  const { loginId, email, characterName } = request.data || {};
+  const { loginId, email, characterName, friendCode = "", factionName = "" } = request.data || {};
   const normalizedLoginId = String(loginId || "").trim().toLowerCase();
   const normalizedEmail = String(email || "").trim().toLowerCase();
   const normalizedCharacterName = String(characterName || "").trim();
+  const normalizedFriendCode = String(friendCode || "").replace(/\D/g, "");
+  const normalizedFactionName = String(factionName || "").trim();
 
-  if (!normalizedLoginId || !normalizedEmail || !normalizedCharacterName) {
-    throw new HttpsError("invalid-argument", "아이디, 이메일, 캐릭터 이름을 모두 입력해 주세요.");
+  if (!normalizedLoginId || !normalizedEmail || !normalizedCharacterName || !normalizedFriendCode) {
+    throw new HttpsError("invalid-argument", "아이디, 이메일, 캐릭터 이름, 친구코드를 모두 입력해 주세요.");
+  }
+
+  if (!allowedFactions.has(normalizedFactionName)) {
+    throw new HttpsError("invalid-argument", "파벌 이름을 올바르게 선택해 주세요.");
+  }
+
+  if (!/^\d+$/.test(normalizedFriendCode)) {
+    throw new HttpsError("invalid-argument", "친구코드는 숫자만 입력해 주세요.");
   }
 
   const [loginIdSnapshot, characterSnapshot, emailSnapshot] = await Promise.all([
@@ -206,9 +167,21 @@ exports.getRankingBoard = onCall(async (request) => {
     traitSnapshot.docs.map((item) => [item.id, Number(item.data().requiredPoints || 0)])
   );
 
-  const rankings = userSnapshot.docs
-    .map((item) => {
+  const preferredUsers = Array.from(
+    userSnapshot.docs.reduce((map, item) => {
       const data = item.data();
+      const key = String(data.uid || item.id || "").trim();
+      const current = map.get(key);
+      const score = item.id === data.characterName ? 2 : item.id !== data.uid ? 1 : 0;
+      if (!current || score > current.score) {
+        map.set(key, { score, item, data });
+      }
+      return map;
+    }, new Map()).values()
+  );
+
+  const rankings = preferredUsers
+    .map(({ item, data }) => {
       const selectedTraitIds = Array.isArray(data.selectedTraitIds) ? data.selectedTraitIds : [];
       const usedTraitPoints = selectedTraitIds.reduce(
         (sum, traitId) => sum + Number(traitPointMap.get(traitId) || 0),
@@ -392,8 +365,10 @@ exports.createItemDefinition = onCall(async (request) => {
     description = "",
     shortLabel = "",
     icon = "🎁",
-    category = "기타",
+    spriteKey = "",
+    category = "기타 아이템",
     price = 0,
+    sellInShop = true,
   } = request.data || {};
 
   const normalizedName = String(name || "").trim();
@@ -403,32 +378,39 @@ exports.createItemDefinition = onCall(async (request) => {
 
   const itemId = buildItemId(normalizedName);
   const normalizedPrice = Math.max(0, Number(price || 0));
+  const shouldSellInShop = Boolean(sellInShop);
 
-  await Promise.all([
-    db.collection("item-db").doc(itemId).set(
+  await db.collection("item-db").doc(itemId).set(
+    {
+      name: normalizedName,
+      description: String(description || "").trim(),
+      shortLabel: String(shortLabel || normalizedName).trim(),
+      icon: String(icon || "🎁").trim(),
+      spriteKey: String(spriteKey || "").trim(),
+      category: normalizeItemCategory(category),
+      sellInShop: shouldSellInShop,
+      sortOrder: Date.now(),
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  if (shouldSellInShop) {
+    await db.collection("shop").doc(itemId).set(
       {
         name: normalizedName,
         description: String(description || "").trim(),
-        shortLabel: String(shortLabel || normalizedName).trim(),
-        icon: String(icon || "🎁").trim(),
-        category: String(category || "기타").trim(),
-        sortOrder: Date.now(),
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    ),
-    db.collection("shop").doc(itemId).set(
-      {
-        name: normalizedName,
-        description: String(description || "").trim(),
+        spriteKey: String(spriteKey || "").trim(),
         price: normalizedPrice,
         sortOrder: Date.now(),
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
-    ),
-  ]);
+    );
+  } else {
+    await db.collection("shop").doc(itemId).delete().catch(() => null);
+  }
 
   return { ok: true, itemId };
 });
@@ -443,8 +425,10 @@ exports.updateItemDefinition = onCall(async (request) => {
     description = "",
     shortLabel = "",
     icon = "🎁",
-    category = "기타",
+    spriteKey = "",
+    category = "기타 아이템",
     price = 0,
+    sellInShop = true,
   } = request.data || {};
 
   const normalizedItemId = String(itemId || "").trim();
@@ -460,25 +444,33 @@ exports.updateItemDefinition = onCall(async (request) => {
   }
 
   const normalizedPrice = Math.max(0, Number(price || 0));
-  await Promise.all([
-    itemRef.update({
-      name: normalizedName,
-      description: String(description || "").trim(),
-      shortLabel: String(shortLabel || normalizedName).trim(),
-      icon: String(icon || "🎁").trim(),
-      category: String(category || "기타").trim(),
-      updatedAt: FieldValue.serverTimestamp(),
-    }),
-    db.collection("shop").doc(normalizedItemId).set(
+  const shouldSellInShop = Boolean(sellInShop);
+
+  await itemRef.update({
+    name: normalizedName,
+    description: String(description || "").trim(),
+    shortLabel: String(shortLabel || normalizedName).trim(),
+    icon: String(icon || "🎁").trim(),
+    spriteKey: String(spriteKey || "").trim(),
+    category: normalizeItemCategory(category),
+    sellInShop: shouldSellInShop,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  if (shouldSellInShop) {
+    await db.collection("shop").doc(normalizedItemId).set(
       {
         name: normalizedName,
         description: String(description || "").trim(),
+        spriteKey: String(spriteKey || "").trim(),
         price: normalizedPrice,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
-    ),
-  ]);
+    );
+  } else {
+    await db.collection("shop").doc(normalizedItemId).delete().catch(() => null);
+  }
 
   const usersSnapshot = await db.collection("users").get();
   await Promise.all(
@@ -499,7 +491,8 @@ exports.updateItemDefinition = onCall(async (request) => {
           description: String(description || "").trim(),
           shortLabel: String(shortLabel || normalizedName).trim(),
           icon: String(icon || "🎁").trim(),
-          category: String(category || "기타").trim(),
+          spriteKey: String(spriteKey || "").trim(),
+          category: normalizeItemCategory(category),
         };
       });
 
@@ -852,21 +845,21 @@ exports.respondParcel = onCall(async (request) => {
   const action = String(request.data?.action || "").trim();
 
   if (!parcelId || !["accept", "reject"].includes(action)) {
-    throw new HttpsError("invalid-argument", "?뚰룷 泥섎━ 諛⑹떇???щ컮瑜댁? ?딆뒿?덈떎.");
+    throw new HttpsError("invalid-argument", "소포 처리 방식이 올바르지 않습니다.");
   }
 
   const parcelRef = db.collection("parcels").doc(parcelId);
   const parcelSnapshot = await parcelRef.get();
   if (!parcelSnapshot.exists) {
-    throw new HttpsError("not-found", "????뚰룷瑜?李얠? 紐삵뻽?듬땲??");
+    throw new HttpsError("not-found", "대상 소포를 찾지 못했습니다.");
   }
 
   const parcel = parcelSnapshot.data();
   if (parcel.receiverUid !== request.auth.uid) {
-    throw new HttpsError("permission-denied", "???뚰룷瑜?泥섎━??沅뚰븳???놁뒿?덈떎.");
+    throw new HttpsError("permission-denied", "이 소포를 처리할 권한이 없습니다.");
   }
   if (parcel.status !== "pending") {
-    throw new HttpsError("failed-precondition", "?대? 泥섎━???뚰룷?쇱꽌 ?ㅼ떆 ?좏깮?????놁뒿?덈떎.");
+    throw new HttpsError("failed-precondition", "이미 처리된 소포여서 다시 선택할 수 없습니다.");
   }
   await resolveParcel({
     parcelId,
@@ -1007,27 +1000,11 @@ async function assertAdmin(uid) {
 async function ensureGlobalGameData() {
   const writes = [];
 
-  for (const item of defaultShopItems) {
-    const ref = db.collection("shop").doc(item.id);
-    const snapshot = await ref.get();
-    if (!snapshot.exists) {
-      writes.push(ref.set(item));
-    }
-  }
-
   for (const trait of defaultTraits) {
     const ref = db.collection("traits").doc(trait.id);
     const snapshot = await ref.get();
     if (!snapshot.exists) {
       writes.push(ref.set(trait));
-    }
-  }
-
-  for (const item of defaultItemDatabase) {
-    const ref = db.collection("item-db").doc(item.id);
-    const snapshot = await ref.get();
-    if (!snapshot.exists) {
-      writes.push(ref.set(item));
     }
   }
 
@@ -1155,7 +1132,7 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
     if (action === "reject" && currentParcel.wrapped) {
       const rejectTicketIndex = receiverInventory.findIndex((item) => item?.name === "거절권");
       if (rejectTicketIndex === -1) {
-        throw new HttpsError("failed-precondition", "?ъ옣 ?뚰룷瑜?嫄곗젅?섎젮硫?嫄곗젅沅뚯씠 ?꾩슂?⑸땲??");
+        throw new HttpsError("failed-precondition", "포장된 소포를 거절하려면 거절권이 필요합니다.");
       }
       receiverInventory.splice(rejectTicketIndex, 1);
     }
@@ -1227,12 +1204,12 @@ function buildParcelPreview({ itemName, itemNames = [], currencyAmount }) {
   if (Array.isArray(itemNames) && itemNames.length) {
     parts.push(`아이템 ${itemNames.join(", ")}`);
   } else if (itemName) {
-    parts.push(`?꾩씠??${String(itemName).trim()}`);
+    parts.push(`아이템 ${String(itemName).trim()}`);
   }
   if (Number(currencyAmount || 0) > 0) {
     parts.push(`환 ${Number(currencyAmount || 0)}`);
   }
-  return parts.join(" / ") || "?뚰룷媛 ?꾩갑?덉뒿?덈떎.";
+  return parts.join(" / ") || "소포가 도착했습니다.";
 }
 
 function buildNoticeId(title, date) {
@@ -1250,6 +1227,35 @@ function serialize(data) {
   return JSON.parse(JSON.stringify(data));
 }
 
+function normalizeItemCategory(category) {
+  const normalizedCategory = String(category || "").trim() || "기타 아이템";
+  const categoryMap = new Map([
+    ["권한", "소모품"],
+    ["광물", "화폐"],
+    ["기타", "기타 아이템"],
+    ["기타 아이템", "기타 아이템"],
+    ["꽃&식물", "생물"],
+    ["몬스터 잔해", "기타 아이템"],
+    ["무기", "기타 아이템"],
+    ["물약", "소모품"],
+    ["배지", "치장 아이템"],
+    ["상자", "소모품"],
+    ["생물", "생물"],
+    ["스킬", "기타 아이템"],
+    ["클래스", "기타 아이템"],
+    ["스킬,클래스", "기타 아이템"],
+    ["시스템", "기타 아이템"],
+    ["시즈널 이벤트", "기타 아이템"],
+    ["소모품", "소모품"],
+    ["악세서리", "치장 아이템"],
+    ["음식", "음식"],
+    ["의상", "치장 아이템"],
+    ["치장 아이템", "치장 아이템"],
+    ["화폐", "화폐"],
+  ]);
+  return categoryMap.get(normalizedCategory) || "기타 아이템";
+}
+
 function buildInventoryItemFromDefinition(item) {
   return {
     itemId: item.id || "",
@@ -1257,7 +1263,8 @@ function buildInventoryItemFromDefinition(item) {
     description: String(item.description || "").trim(),
     shortLabel: String(item.shortLabel || item.name || "지급 아이템").trim(),
     icon: String(item.icon || "🎁").trim(),
-    category: String(item.category || "기타").trim(),
+    spriteKey: String(item.spriteKey || "").trim(),
+    category: normalizeItemCategory(item.category),
     grantedAt: new Date().toISOString(),
   };
 }
@@ -1279,13 +1286,21 @@ function buildItemId(name) {
 
 async function findUserSnapshotByUid(uid) {
   const legacySnapshot = await db.collection("users").doc(uid).get();
-  if (legacySnapshot.exists) {
-    return legacySnapshot;
-  }
-
   const profileQuery = await db.collection("users").where("uid", "==", uid).limit(1).get();
   if (!profileQuery.empty) {
-    return profileQuery.docs[0];
+    const preferredSnapshot = profileQuery.docs[0];
+    if (
+      legacySnapshot.exists &&
+      legacySnapshot.id !== preferredSnapshot.id &&
+      String(legacySnapshot.data()?.uid || "").trim() === String(uid || "").trim()
+    ) {
+      await legacySnapshot.ref.delete().catch(() => null);
+    }
+    return preferredSnapshot;
+  }
+
+  if (legacySnapshot.exists) {
+    return legacySnapshot;
   }
 
   return null;
