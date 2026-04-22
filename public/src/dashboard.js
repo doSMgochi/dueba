@@ -26,6 +26,7 @@ import {
   normalizeSpriteCategory,
   renderItemVisual,
 } from "./item-sprites.js";
+import { cleanupYachtModule, initYachtMenu, renderYachtMenu } from "./yacht.js";
 import {
   adminDeleteUser,
   adminManageUser,
@@ -53,6 +54,7 @@ export const menuDefinitions = [
   // 대국 정보 메뉴는 현재 미사용 상태라 임시 비활성화합니다.
   // { id: "match", label: "대국 정보" },
   { id: "match-results", label: "대국 결과" },
+  { id: "yacht", label: "요트" },
   // 특성치 시스템은 전체 개편 전까지 임시 비활성화합니다.
   // { id: "traits", label: "특성치" },
   { id: "inventory", label: "인벤토리" },
@@ -164,10 +166,12 @@ export function buildDashboard({
   onProfilePatched,
   onToast,
 }) {
+  cleanupYachtModule();
   initializeFloatingTooltip();
   const visibleMenus = menuDefinitions.filter((menu) => !menu.adminOnly || adminRoles.includes(profile.role));
-  const safeActiveMenuId = visibleMenus.some((menu) => menu.id === activeMenuId)
-    ? activeMenuId
+  const preferredMenuId = profile?.activeYachtRoomId ? "yacht" : activeMenuId;
+  const safeActiveMenuId = visibleMenus.some((menu) => menu.id === preferredMenuId)
+    ? preferredMenuId
     : visibleMenus[0].id;
 
   document.querySelector("#welcome-title").textContent = `${profile.characterName}님 환영합니다`;
@@ -223,6 +227,7 @@ export function buildDashboard({
     todoPage = 0;
     void hydrateTodoPanel(profile.uid);
   }
+  if (safeActiveMenuId === "yacht") initYachtMenu({ profile, onProfilePatched, onToast });
   if (safeActiveMenuId === "roulette") {
     attachRouletteEvents({ profile, onToast });
     void hydrateRoulettePanel(profile);
@@ -577,6 +582,7 @@ function renderMenuContent(menuId, profile) {
         </div>
       </article>
     `,
+    yacht: renderYachtMenu(profile),
     // traits: `
     //   <article class="content-card full">
     //     <div class="trait-header">

@@ -229,6 +229,11 @@ showToast.hideIfMessage = (expectedMessage) => {
   }
 };
 
+showToast.forceHide = () => {
+  window.clearTimeout(showToast.timerId);
+  toast.classList.add("hidden");
+};
+
 function maybeShowTeamEnrollmentWarning(profile) {
   const status = String(profile?.teamEnrollmentStatus || "").trim();
   if (status !== "invalid-friend-code") {

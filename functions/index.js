@@ -18,6 +18,20 @@ const defaultTraits = [
   { id: "hidden-trait", name: "특성 비공개", successPoints: 0, failPoints: 0, requiredPoints: 10, sortOrder: 4 },
 ];
 const allowedFactions = new Set(["매화", "난초", "국화", "대나무"]);
+const YACHT_MAX_PLAYERS = 4;
+const YACHT_DICE_COUNT = 5;
+const YACHT_ROLL_ANIMATION_MS = 3400;
+const YACHT_TURN_LIMIT_MS = 30000;
+const YACHT_ROOM_STATUS_WAITING = "waiting";
+const YACHT_ROOM_STATUS_PLAYING = "playing";
+const YACHT_ROOM_STATUS_FINISHED = "finished";
+const YACHT_PHASE_WAITING = "waiting";
+const YACHT_PHASE_AWAITING_ROLL = "awaiting-roll";
+const YACHT_PHASE_ROLLING = "rolling";
+const YACHT_PHASE_FINISHED = "finished";
+const YACHT_UPPER_IDS = ["aces", "deuces", "threes", "fours", "fives", "sixes"];
+const YACHT_LOWER_IDS = ["choice", "threeKind", "fourKind", "fullHouse", "smallStraight", "largeStraight", "yacht"];
+const YACHT_PLAYABLE_CATEGORY_IDS = [...YACHT_UPPER_IDS, ...YACHT_LOWER_IDS];
 exports.ensureUserProfile = onCall(async (request) => {
   assertAuthenticated(request);
   const { loginId, nickname, characterName, friendCode = "", factionName = "" } = request.data || {};
@@ -967,6 +981,503 @@ exports.markNotificationRead = onCall(async (request) => {
   return { ok: true };
 });
 
+exports.yachtAction = onCall(async (request) => {
+  assertAuthenticated(request);
+  const action = String(request.data?.action || "").trim();
+  const roomId = String(request.data?.roomId || "").trim();
+  const uid = request.auth.uid;
+
+  switch (action) {
+    case "create-room": {
+      const profileSnapshot = await findUserSnapshotByUid(uid);
+      if (!profileSnapshot) {
+        throw new HttpsError("not-found", "사용자 프로필을 찾지 못했습니다.");
+      }
+
+      const title = String(request.data?.title || "").trim();
+      if (!title) {
+        throw new HttpsError("invalid-argument", "방 제목을 입력해 주세요.");
+      }
+
+      const roomRef = db.collection("yacht-rooms").doc();
+      const now = Date.now();
+      await roomRef.set({
+        title,
+        ownerUid: uid,
+        status: YACHT_ROOM_STATUS_WAITING,
+        actionPhase: YACHT_PHASE_WAITING,
+        players: [buildYachtPlayerFromProfile(profileSnapshot.data())],
+        spectators: [],
+        dice: [1, 1, 1, 1, 1],
+        heldDice: [false, false, false, false, false],
+        diceSeed: now,
+        rollCount: 0,
+        currentTurnSeat: 0,
+        actionDeadlineAtMs: 0,
+        rollResolveAtMs: 0,
+        visualDiceState: null,
+        rewardPlan: null,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        createdAtMs: now,
+        updatedAtMs: now,
+      });
+      return { ok: true, roomId: roomRef.id };
+    }
+    case "join-room":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const profileSnapshot = await findUserSnapshotByUid(uid);
+        if (!profileSnapshot) {
+          throw new HttpsError("not-found", "사용자 프로필을 찾지 못했습니다.");
+        }
+
+        const room = snapshot.data();
+        if (String(room.status || "") !== YACHT_ROOM_STATUS_WAITING) {
+          throw new HttpsError("failed-precondition", "진행 중인 방에는 플레이어로 입장할 수 없습니다.");
+        }
+
+        const players = Array.isArray(room.players) ? [...room.players] : [];
+        if (players.some((player) => String(player.uid || "") === uid)) {
+          return { ok: true, roomId };
+        }
+        if (players.length >= YACHT_MAX_PLAYERS) {
+          throw new HttpsError("failed-precondition", "방 인원이 가득 찼습니다.");
+        }
+
+        const spectators = (Array.isArray(room.spectators) ? room.spectators : []).filter(
+          (spectator) => String(spectator.uid || "") !== uid
+        );
+        players.push(buildYachtPlayerFromProfile(profileSnapshot.data()));
+
+        transaction.update(snapshot.ref, {
+          players,
+          spectators,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true, roomId };
+      });
+    case "join-spectator":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const profileSnapshot = await findUserSnapshotByUid(uid);
+        if (!profileSnapshot) {
+          throw new HttpsError("not-found", "사용자 프로필을 찾지 못했습니다.");
+        }
+
+        const room = snapshot.data();
+        if (String(room.status || "") !== YACHT_ROOM_STATUS_PLAYING) {
+          throw new HttpsError("failed-precondition", "진행 중인 방만 관전할 수 있습니다.");
+        }
+
+        const players = Array.isArray(room.players) ? room.players : [];
+        if (players.some((player) => String(player.uid || "") === uid)) {
+          return { ok: true, roomId };
+        }
+
+        const spectators = Array.isArray(room.spectators) ? [...room.spectators] : [];
+        if (!spectators.some((spectator) => String(spectator.uid || "") === uid)) {
+          const data = profileSnapshot.data();
+          spectators.push({
+            uid: data.uid,
+            characterName: data.characterName,
+            nickname: data.nickname,
+          });
+        }
+
+        transaction.update(snapshot.ref, {
+          spectators,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true, roomId };
+      });
+    case "toggle-ready":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        if (String(room.status || "") !== YACHT_ROOM_STATUS_WAITING) {
+          throw new HttpsError("failed-precondition", "대기실에서만 준비 상태를 바꿀 수 있습니다.");
+        }
+        if (String(room.ownerUid || "") === uid) {
+          throw new HttpsError("failed-precondition", "방장은 준비 버튼을 누를 수 없습니다.");
+        }
+
+        const players = (Array.isArray(room.players) ? room.players : []).map((player) =>
+          String(player.uid || "") === uid ? { ...player, isReady: !player.isReady } : player
+        );
+
+        transaction.update(snapshot.ref, {
+          players,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true };
+      });
+    case "start-game":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        if (String(room.status || "") !== YACHT_ROOM_STATUS_WAITING) {
+          throw new HttpsError("failed-precondition", "이미 시작된 방입니다.");
+        }
+        if (!canYachtHostStartGame(room, uid)) {
+          throw new HttpsError("failed-precondition", resolveYachtStartError(room, uid));
+        }
+
+        const players = (Array.isArray(room.players) ? room.players : []).map((player) =>
+          finalizeYachtPlayer({
+            ...player,
+            isReady: false,
+            rank: 0,
+            rewardCurrency: 0,
+            scoreSheet: createEmptyYachtScoreSheet(),
+          })
+        );
+
+        transaction.update(snapshot.ref, {
+          players,
+          status: YACHT_ROOM_STATUS_PLAYING,
+          actionPhase: YACHT_PHASE_AWAITING_ROLL,
+          currentTurnSeat: 0,
+          rollCount: 0,
+          dice: [1, 1, 1, 1, 1],
+          heldDice: [false, false, false, false, false],
+          diceSeed: Date.now(),
+          actionDeadlineAtMs: Date.now() + YACHT_TURN_LIMIT_MS,
+          rollResolveAtMs: 0,
+          visualDiceState: null,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true };
+      });
+    case "request-roll":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        if (!canYachtUserRoll(room, uid)) {
+          throw new HttpsError("failed-precondition", "지금은 주사위를 굴릴 수 없습니다.");
+        }
+
+        const nextRollCount = Number(room.rollCount || 0) + 1;
+        const seed = Date.now();
+        const previousDice = normalizeYachtDice(room.dice);
+        const heldDice = normalizeYachtHeldDice(room.heldDice);
+        const rolledDice = buildYachtRolledDice(seed, nextRollCount);
+        const dice = previousDice.map((value, index) => (heldDice[index] ? value : rolledDice[index]));
+
+        transaction.update(snapshot.ref, {
+          dice,
+          heldDice,
+          diceSeed: seed,
+          rollCount: nextRollCount,
+          actionPhase: YACHT_PHASE_ROLLING,
+          rollResolveAtMs: Date.now() + YACHT_ROLL_ANIMATION_MS,
+          visualDiceState: null,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true };
+      });
+    case "toggle-hold":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        if (!canYachtUserToggleHold(room, uid)) {
+          throw new HttpsError("failed-precondition", "지금은 주사위를 고정할 수 없습니다.");
+        }
+
+        const dieIndex = Number(request.data?.dieIndex);
+        if (!Number.isInteger(dieIndex) || dieIndex < 0 || dieIndex >= YACHT_DICE_COUNT) {
+          throw new HttpsError("invalid-argument", "잘못된 주사위 번호입니다.");
+        }
+        const diceSeed = Number(request.data?.diceSeed || 0);
+        if (diceSeed && Number(room.diceSeed || 0) !== diceSeed) {
+          throw new HttpsError("failed-precondition", "이미 다음 굴림 상태로 변경되었습니다.");
+        }
+
+        const heldDice = normalizeYachtHeldDice(room.heldDice);
+        heldDice[dieIndex] = !heldDice[dieIndex];
+        const nextVisualDiceState = request.data?.visualDiceState
+          ? normalizeYachtVisualDiceState(
+              request.data?.visualDiceState,
+              Number(room.diceSeed || 0),
+              normalizeYachtDice(room.dice)
+            )
+          : room.visualDiceState || null;
+        transaction.update(snapshot.ref, {
+          heldDice,
+          visualDiceState: nextVisualDiceState,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true };
+      });
+    case "sync-dice":
+    case "sync-visual-state":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        const diceSeed = Number(request.data?.diceSeed || 0);
+        if (String(room.status || "") !== YACHT_ROOM_STATUS_PLAYING) {
+          throw new HttpsError("failed-precondition", "진행 중인 방만 동기화할 수 있습니다.");
+        }
+        if (String(room.actionPhase || "") === YACHT_PHASE_ROLLING) {
+          throw new HttpsError("failed-precondition", "굴리는 중에는 결과를 동기화할 수 없습니다.");
+        }
+        if (String(getCurrentYachtTurnPlayer(room)?.uid || "") !== String(uid || "")) {
+          throw new HttpsError("failed-precondition", "현재 차례 플레이어만 결과를 동기화할 수 있습니다.");
+        }
+        if (diceSeed && Number(room.diceSeed || 0) !== diceSeed) {
+          throw new HttpsError("failed-precondition", "이미 다음 굴림 상태로 변경되었습니다.");
+        }
+
+        const dice = normalizeYachtDice(request.data?.dice);
+        const visualDiceState = normalizeYachtVisualDiceState(
+          request.data?.visualDiceState,
+          Number(room.diceSeed || 0),
+          dice
+        );
+        transaction.update(snapshot.ref, {
+          dice,
+          visualDiceState,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true };
+      });
+    case "reset-holds":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        if (!canYachtUserToggleHold(room, uid)) {
+          throw new HttpsError("failed-precondition", "지금은 주사위 고정을 해제할 수 없습니다.");
+        }
+
+        transaction.update(snapshot.ref, {
+          heldDice: [false, false, false, false, false],
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true };
+      });
+    case "lock-score":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        const categoryId = String(request.data?.categoryId || "");
+        if (!YACHT_PLAYABLE_CATEGORY_IDS.includes(categoryId)) {
+          throw new HttpsError("invalid-argument", "잘못된 점수 칸입니다.");
+        }
+        if (!canYachtUserScore(room, uid)) {
+          throw new HttpsError("failed-precondition", "지금은 점수를 확정할 수 없습니다.");
+        }
+
+        const players = [...(Array.isArray(room.players) ? room.players : [])];
+        const seat = Number(room.currentTurnSeat || 0);
+        const player = players[seat];
+        if (!player || String(player.uid || "") !== uid) {
+          throw new HttpsError("failed-precondition", "현재 차례 플레이어가 아닙니다.");
+        }
+        if (player.scoreSheet?.[categoryId]?.locked) {
+          throw new HttpsError("failed-precondition", "이미 선택한 점수 칸입니다.");
+        }
+
+        const scoreSheet = {
+          ...(player.scoreSheet || createEmptyYachtScoreSheet()),
+          [categoryId]: {
+            score: calculateYachtCategoryScore(categoryId, normalizeYachtDice(room.dice)),
+            locked: true,
+          },
+        };
+        players[seat] = finalizeYachtPlayer({ ...player, scoreSheet });
+
+        applyYachtPostScoreUpdate(transaction, snapshot.ref, players, seat);
+        return { ok: true };
+      });
+    case "leave-room":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        applyYachtLeaveRoom(transaction, snapshot, uid);
+        return { ok: true };
+      });
+    case "restart-room":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        if (String(room.status || "") !== YACHT_ROOM_STATUS_FINISHED) {
+          return { ok: true, redirectLobby: true };
+        }
+
+        const players = Array.isArray(room.players) ? [...room.players] : [];
+        const spectators = Array.isArray(room.spectators) ? [...room.spectators] : [];
+        const requesterPlayer = players.find((player) => String(player.uid || "") === uid);
+        const requesterSpectator = spectators.find((spectator) => String(spectator.uid || "") === uid);
+        if (!requesterPlayer && !requesterSpectator) {
+          throw new HttpsError("failed-precondition", "방에 남아 있는 참가자만 재시작할 수 있습니다.");
+        }
+
+        const restartRoomId = String(room.restartRoomId || "").trim();
+        if (restartRoomId) {
+          const restartRef = db.collection("yacht-rooms").doc(restartRoomId);
+          const restartSnapshot = await transaction.get(restartRef);
+          if (!restartSnapshot.exists) {
+            transaction.update(snapshot.ref, {
+              restartRoomId: FieldValue.delete(),
+              updatedAt: FieldValue.serverTimestamp(),
+              updatedAtMs: Date.now(),
+            });
+            return { ok: true, redirectLobby: true };
+          }
+
+          const restartRoom = restartSnapshot.data();
+          if (String(restartRoom.status || "") !== YACHT_ROOM_STATUS_WAITING) {
+            return { ok: true, redirectLobby: true };
+          }
+
+          const restartPlayers = Array.isArray(restartRoom.players) ? [...restartRoom.players] : [];
+          if (!restartPlayers.some((player) => String(player.uid || "") === uid)) {
+            if (restartPlayers.length >= YACHT_MAX_PLAYERS) {
+              throw new HttpsError("resource-exhausted", "재시작 대기실 인원이 가득 찼습니다.");
+            }
+            const profileSnapshot = await findUserSnapshotByUid(uid);
+            if (!profileSnapshot) {
+              throw new HttpsError("not-found", "사용자 프로필을 찾지 못했습니다.");
+            }
+            restartPlayers.push(buildYachtPlayerFromProfile(profileSnapshot.data()));
+          }
+
+          transaction.update(restartRef, {
+            players: restartPlayers.map((player, index) =>
+              finalizeYachtPlayer({
+                ...player,
+                isReady: index === 0 ? true : Boolean(player.isReady),
+                rank: 0,
+                rewardCurrency: 0,
+                scoreSheet: createEmptyYachtScoreSheet(),
+              })
+            ),
+            spectators: (Array.isArray(restartRoom.spectators) ? restartRoom.spectators : []).filter(
+              (spectator) => String(spectator.uid || "") !== uid
+            ),
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedAtMs: Date.now(),
+          });
+          return { ok: true, roomId: restartRoomId, role: "player" };
+        }
+
+        let requesterSeed = requesterPlayer;
+        if (!requesterSeed) {
+          const profileSnapshot = await findUserSnapshotByUid(uid);
+          if (!profileSnapshot) {
+            throw new HttpsError("not-found", "사용자 프로필을 찾지 못했습니다.");
+          }
+          requesterSeed = buildYachtPlayerFromProfile(profileSnapshot.data());
+        }
+
+        const restartRef = db.collection("yacht-rooms").doc();
+        transaction.set(restartRef, {
+          title: room.title || "Yacht",
+          mode: "multi",
+          ownerUid: uid,
+          players: [
+            finalizeYachtPlayer({
+              ...requesterSeed,
+              isReady: true,
+              rank: 0,
+              rewardCurrency: 0,
+              scoreSheet: createEmptyYachtScoreSheet(),
+            }),
+          ],
+          spectators: [],
+          status: YACHT_ROOM_STATUS_WAITING,
+          actionPhase: YACHT_PHASE_WAITING,
+          currentTurnSeat: 0,
+          rollCount: 0,
+          dice: [1, 1, 1, 1, 1],
+          heldDice: [false, false, false, false, false],
+          diceSeed: Date.now(),
+          actionDeadlineAtMs: 0,
+          rollResolveAtMs: 0,
+          visualDiceState: null,
+          rewardPlan: null,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        transaction.update(snapshot.ref, {
+          restartRoomId: restartRef.id,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: Date.now(),
+        });
+        return { ok: true, roomId: restartRef.id, role: "player" };
+      });
+    case "advance-room":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        if (String(room.status || "") !== YACHT_ROOM_STATUS_PLAYING) {
+          return { ok: true };
+        }
+
+        const now = Date.now();
+        if (String(room.actionPhase || "") === YACHT_PHASE_ROLLING && Number(room.rollResolveAtMs || 0) <= now) {
+          transaction.update(snapshot.ref, {
+            actionPhase: YACHT_PHASE_AWAITING_ROLL,
+            actionDeadlineAtMs: Date.now() + YACHT_TURN_LIMIT_MS,
+            rollResolveAtMs: 0,
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedAtMs: Date.now(),
+          });
+          return { ok: true, advanced: "resolve-roll" };
+        }
+
+        if (
+          String(room.actionPhase || "") === YACHT_PHASE_AWAITING_ROLL &&
+          Number(room.actionDeadlineAtMs || 0) <= now
+        ) {
+          if (Number(room.rollCount || 0) < 3) {
+            const nextRollCount = Math.min(3, Number(room.rollCount || 0) + 1);
+            const seed = Date.now();
+            const previousDice = normalizeYachtDice(room.dice);
+            const heldDice = normalizeYachtHeldDice(room.heldDice);
+            const rolledDice = buildYachtRolledDice(seed, nextRollCount);
+            const dice = previousDice.map((value, index) => (heldDice[index] ? value : rolledDice[index]));
+            transaction.update(snapshot.ref, {
+              dice,
+              heldDice,
+              diceSeed: seed,
+              rollCount: nextRollCount,
+              actionPhase: YACHT_PHASE_ROLLING,
+              actionDeadlineAtMs: 0,
+              rollResolveAtMs: Date.now() + YACHT_ROLL_ANIMATION_MS,
+              visualDiceState: null,
+              updatedAt: FieldValue.serverTimestamp(),
+              updatedAtMs: Date.now(),
+            });
+            return { ok: true, advanced: "auto-roll" };
+          }
+
+          const players = [...(Array.isArray(room.players) ? room.players : [])];
+          const seat = Number(room.currentTurnSeat || 0);
+          const player = players[seat];
+          if (!player) {
+            return { ok: true };
+          }
+          const bestCategoryId = pickBestYachtScoreCategory(player.scoreSheet, normalizeYachtDice(room.dice));
+          if (!bestCategoryId) {
+            return { ok: true };
+          }
+
+          const scoreSheet = {
+            ...(player.scoreSheet || createEmptyYachtScoreSheet()),
+            [bestCategoryId]: {
+              score: calculateYachtCategoryScore(bestCategoryId, normalizeYachtDice(room.dice)),
+              locked: true,
+            },
+          };
+          players[seat] = finalizeYachtPlayer({ ...player, scoreSheet });
+          applyYachtPostScoreUpdate(transaction, snapshot.ref, players, seat);
+          return { ok: true, advanced: "auto-score" };
+        }
+
+        return { ok: true };
+      });
+    default:
+      throw new HttpsError("invalid-argument", "알 수 없는 요트 액션입니다.");
+  }
+});
+
 exports.spinRoulette = onRequest(async (_req, res) => {
   res.status(410).json({
     error: "Roulette reward grant is disabled. The frontend logs roulette results directly.",
@@ -1210,6 +1721,373 @@ function buildParcelPreview({ itemName, itemNames = [], currencyAmount }) {
     parts.push(`환 ${Number(currencyAmount || 0)}`);
   }
   return parts.join(" / ") || "소포가 도착했습니다.";
+}
+
+async function runYachtRoomMutation(roomId, handler) {
+  const normalizedRoomId = String(roomId || "").trim();
+  if (!normalizedRoomId) {
+    throw new HttpsError("invalid-argument", "방 ID가 필요합니다.");
+  }
+
+  return db.runTransaction(async (transaction) => {
+    const roomRef = db.collection("yacht-rooms").doc(normalizedRoomId);
+    const snapshot = await transaction.get(roomRef);
+    if (!snapshot.exists) {
+      throw new HttpsError("not-found", "방을 찾지 못했습니다.");
+    }
+    return handler(transaction, snapshot);
+  });
+}
+
+function buildYachtPlayerFromProfile(profile) {
+  return finalizeYachtPlayer({
+    uid: profile.uid,
+    characterName: profile.characterName,
+    nickname: profile.nickname,
+    isReady: false,
+    scoreSheet: createEmptyYachtScoreSheet(),
+    upperSubtotal: 0,
+    bonus: 0,
+    finalScore: 0,
+    rank: 0,
+    rewardCurrency: 0,
+  });
+}
+
+function createEmptyYachtScoreSheet() {
+  return YACHT_PLAYABLE_CATEGORY_IDS.reduce((map, categoryId) => {
+    map[categoryId] = { score: null, locked: false };
+    return map;
+  }, {});
+}
+
+function finalizeYachtPlayer(player) {
+  const scoreSheet = player.scoreSheet || createEmptyYachtScoreSheet();
+  const upperSubtotal = YACHT_UPPER_IDS.reduce((sum, key) => sum + Number(scoreSheet[key]?.score || 0), 0);
+  const lowerSubtotal = YACHT_LOWER_IDS.reduce((sum, key) => sum + Number(scoreSheet[key]?.score || 0), 0);
+  const bonus = upperSubtotal >= 63 ? 35 : 0;
+
+  return {
+    ...player,
+    scoreSheet,
+    upperSubtotal,
+    bonus,
+    finalScore: upperSubtotal + lowerSubtotal + bonus,
+  };
+}
+
+function calculateYachtCategoryScore(categoryId, dice) {
+  const sorted = [...dice].sort((left, right) => left - right);
+  const counts = new Map();
+  dice.forEach((value) => counts.set(value, (counts.get(value) || 0) + 1));
+  const total = dice.reduce((sum, value) => sum + value, 0);
+
+  switch (categoryId) {
+    case "aces":
+      return sumYachtByFace(dice, 1);
+    case "deuces":
+      return sumYachtByFace(dice, 2);
+    case "threes":
+      return sumYachtByFace(dice, 3);
+    case "fours":
+      return sumYachtByFace(dice, 4);
+    case "fives":
+      return sumYachtByFace(dice, 5);
+    case "sixes":
+      return sumYachtByFace(dice, 6);
+    case "choice":
+      return total;
+    case "threeKind":
+      return Array.from(counts.values()).some((count) => count >= 3) ? total : 0;
+    case "fourKind":
+      return Array.from(counts.values()).some((count) => count >= 4) ? total : 0;
+    case "fullHouse": {
+      const values = Array.from(counts.values()).sort((left, right) => right - left);
+      return values[0] === 3 && values[1] === 2 ? 25 : 0;
+    }
+    case "smallStraight":
+      return hasYachtStraight(sorted, 4) ? 25 : 0;
+    case "largeStraight":
+      return hasYachtStraight(sorted, 5) ? 40 : 0;
+    case "yacht":
+      return Array.from(counts.values()).some((count) => count === 5) ? 50 : 0;
+    default:
+      return 0;
+  }
+}
+
+function pickBestYachtScoreCategory(scoreSheet, dice) {
+  return YACHT_PLAYABLE_CATEGORY_IDS
+    .filter((categoryId) => !scoreSheet?.[categoryId]?.locked)
+    .map((categoryId, index) => ({
+      categoryId,
+      score: calculateYachtCategoryScore(categoryId, dice),
+      index,
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      return left.index - right.index;
+    })[0]?.categoryId;
+}
+
+function canYachtHostStartGame(room, uid) {
+  if (String(room.ownerUid || "") !== String(uid || "")) return false;
+  const players = Array.isArray(room.players) ? room.players : [];
+  if (players.length < 2) return false;
+  return players
+    .filter((player) => String(player.uid || "") !== String(room.ownerUid || ""))
+    .every((player) => Boolean(player.isReady));
+}
+
+function resolveYachtStartError(room, uid) {
+  if (String(room.ownerUid || "") !== String(uid || "")) {
+    return "방장만 게임을 시작할 수 있습니다.";
+  }
+  const players = Array.isArray(room.players) ? room.players : [];
+  if (players.length < 2) {
+    return "최소 2명 이상 있어야 게임을 시작할 수 있습니다.";
+  }
+  const waitingPlayers = players.filter(
+    (player) => String(player.uid || "") !== String(room.ownerUid || "") && !player.isReady
+  );
+  if (waitingPlayers.length) {
+    return "다른 플레이어가 모두 준비 완료해야 합니다.";
+  }
+  return "게임을 시작할 수 없습니다.";
+}
+
+function canYachtUserRoll(room, uid) {
+  return (
+    String(room.status || "") === YACHT_ROOM_STATUS_PLAYING &&
+    String(room.actionPhase || "") === YACHT_PHASE_AWAITING_ROLL &&
+    Number(room.rollCount || 0) < 3 &&
+    String(getCurrentYachtTurnPlayer(room)?.uid || "") === String(uid || "")
+  );
+}
+
+function canYachtUserToggleHold(room, uid) {
+  return (
+    String(room.status || "") === YACHT_ROOM_STATUS_PLAYING &&
+    String(room.actionPhase || "") === YACHT_PHASE_AWAITING_ROLL &&
+    Number(room.rollCount || 0) > 0 &&
+    String(getCurrentYachtTurnPlayer(room)?.uid || "") === String(uid || "")
+  );
+}
+
+function canYachtUserScore(room, uid) {
+  return (
+    String(room.status || "") === YACHT_ROOM_STATUS_PLAYING &&
+    String(room.actionPhase || "") !== YACHT_PHASE_ROLLING &&
+    Number(room.rollCount || 0) > 0 &&
+    String(getCurrentYachtTurnPlayer(room)?.uid || "") === String(uid || "")
+  );
+}
+
+function getCurrentYachtTurnPlayer(room) {
+  const players = Array.isArray(room?.players) ? room.players : [];
+  return players[Number(room?.currentTurnSeat || 0)] || null;
+}
+
+function findNextYachtSeat(players, currentSeat) {
+  for (let offset = 1; offset <= players.length; offset += 1) {
+    const nextSeat = (currentSeat + offset) % players.length;
+    if (!isYachtScoreSheetComplete(players[nextSeat]?.scoreSheet)) return nextSeat;
+  }
+  return currentSeat;
+}
+
+function isYachtScoreSheetComplete(scoreSheet) {
+  return YACHT_PLAYABLE_CATEGORY_IDS.every((categoryId) => Boolean(scoreSheet?.[categoryId]?.locked));
+}
+
+function normalizeYachtDice(dice) {
+  const nextDice = Array.isArray(dice) ? [...dice] : [];
+  while (nextDice.length < YACHT_DICE_COUNT) nextDice.push(1);
+  return nextDice.slice(0, YACHT_DICE_COUNT).map((value) => Math.max(1, Math.min(6, Number(value || 1))));
+}
+
+function normalizeYachtHeldDice(heldDice) {
+  const nextHeldDice = Array.isArray(heldDice) ? [...heldDice] : [];
+  while (nextHeldDice.length < YACHT_DICE_COUNT) nextHeldDice.push(false);
+  return nextHeldDice.slice(0, YACHT_DICE_COUNT).map((value) => Boolean(value));
+}
+
+function normalizeYachtVisualDiceState(visualDiceState, fallbackDiceSeed = 0, fallbackDice = [1, 1, 1, 1, 1]) {
+  if (!visualDiceState || typeof visualDiceState !== "object") {
+    return null;
+  }
+
+  const diceSeed = Math.max(0, Number(visualDiceState.diceSeed || fallbackDiceSeed || 0));
+  const values = normalizeYachtDice(Array.isArray(visualDiceState.values) ? visualDiceState.values : fallbackDice);
+  const sourcePoses = visualDiceState.poses && typeof visualDiceState.poses === "object" ? visualDiceState.poses : {};
+  const poses = {};
+
+  for (let index = 0; index < YACHT_DICE_COUNT; index += 1) {
+    const pose = sourcePoses[index];
+    if (!pose || typeof pose !== "object") continue;
+
+    const px = Number(pose.position?.x);
+    const py = Number(pose.position?.y);
+    const pz = Number(pose.position?.z);
+    const qx = Number(pose.quaternion?.x);
+    const qy = Number(pose.quaternion?.y);
+    const qz = Number(pose.quaternion?.z);
+    const qw = Number(pose.quaternion?.w);
+
+    if (
+      !Number.isFinite(px) ||
+      !Number.isFinite(py) ||
+      !Number.isFinite(pz) ||
+      !Number.isFinite(qx) ||
+      !Number.isFinite(qy) ||
+      !Number.isFinite(qz) ||
+      !Number.isFinite(qw)
+    ) {
+      continue;
+    }
+
+    poses[index] = {
+      position: { x: px, y: py, z: pz },
+      quaternion: { x: qx, y: qy, z: qz, w: qw },
+    };
+  }
+
+  return {
+    diceSeed,
+    values,
+    poses,
+    updatedAtMs: Date.now(),
+  };
+}
+
+function sumYachtByFace(dice, face) {
+  return dice.filter((value) => value === face).reduce((sum, value) => sum + value, 0);
+}
+
+function hasYachtStraight(sortedDice, length) {
+  const unique = Array.from(new Set(sortedDice));
+  let streak = 1;
+  for (let index = 1; index < unique.length; index += 1) {
+    if (unique[index] === unique[index - 1] + 1) {
+      streak += 1;
+      if (streak >= length) return true;
+    } else {
+      streak = 1;
+    }
+  }
+  return false;
+}
+
+function buildYachtRolledDice(seedBase, rollCount) {
+  return Array.from({ length: YACHT_DICE_COUNT }, (_, index) => {
+    const valueSeed = pseudoRandom(seedBase * 97 + rollCount * 53 + index * 19);
+    return Math.max(1, Math.min(6, Math.floor(valueSeed * 6) + 1));
+  });
+}
+
+function assignYachtRanks(players) {
+  const sorted = [...players].sort((left, right) => {
+    if (Number(right.finalScore || 0) !== Number(left.finalScore || 0)) {
+      return Number(right.finalScore || 0) - Number(left.finalScore || 0);
+    }
+    return String(left.characterName || "").localeCompare(String(right.characterName || ""), "ko");
+  });
+
+  sorted.forEach((player, index) => {
+    player.rank = index + 1;
+  });
+
+  return players.map((player) => {
+    const ranked = sorted.find((item) => String(item.uid || "") === String(player.uid || ""));
+    return { ...player, rank: Number(ranked?.rank || 0) };
+  });
+}
+
+function applyYachtPostScoreUpdate(transaction, roomRef, players, seat) {
+  const everyoneFinished = players.every((item) => isYachtScoreSheetComplete(item.scoreSheet));
+  if (everyoneFinished) {
+    transaction.update(roomRef, {
+      players: assignYachtRanks(players),
+      status: YACHT_ROOM_STATUS_FINISHED,
+      actionPhase: YACHT_PHASE_FINISHED,
+      rollCount: 0,
+      heldDice: [false, false, false, false, false],
+      actionDeadlineAtMs: 0,
+      rollResolveAtMs: 0,
+      visualDiceState: null,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedAtMs: Date.now(),
+    });
+    return;
+  }
+
+  transaction.update(roomRef, {
+    players,
+    currentTurnSeat: findNextYachtSeat(players, seat),
+    actionPhase: YACHT_PHASE_AWAITING_ROLL,
+    rollCount: 0,
+    dice: [1, 1, 1, 1, 1],
+    heldDice: [false, false, false, false, false],
+    diceSeed: Date.now(),
+    actionDeadlineAtMs: Date.now() + YACHT_TURN_LIMIT_MS,
+    rollResolveAtMs: 0,
+    visualDiceState: null,
+    updatedAt: FieldValue.serverTimestamp(),
+    updatedAtMs: Date.now(),
+  });
+}
+
+function applyYachtLeaveRoom(transaction, snapshot, uid) {
+  const room = snapshot.data();
+  let players = (Array.isArray(room.players) ? room.players : []).filter(
+    (player) => String(player.uid || "") !== String(uid || "")
+  );
+  const spectators = (Array.isArray(room.spectators) ? room.spectators : []).filter(
+    (spectator) => String(spectator.uid || "") !== String(uid || "")
+  );
+
+  if (players.length === 0 && spectators.length === 0) {
+    transaction.delete(snapshot.ref);
+    return;
+  }
+
+  let nextOwnerUid = String(room.ownerUid || "");
+  if (!players.some((player) => String(player.uid || "") === nextOwnerUid)) {
+    nextOwnerUid = String(players[0]?.uid || "");
+  }
+
+  let nextTurnSeat = Number(room.currentTurnSeat || 0);
+  if (players.length) {
+    nextTurnSeat = Math.min(nextTurnSeat, players.length - 1);
+    if (
+      String(room.status || "") === YACHT_ROOM_STATUS_PLAYING &&
+      !players.some(
+        (player) => String(player.uid || "") === String(getCurrentYachtTurnPlayer(room)?.uid || "")
+      )
+    ) {
+      nextTurnSeat = findNextYachtSeat(players, Math.max(0, nextTurnSeat - 1));
+    }
+  }
+
+  if (String(room.status || "") === YACHT_ROOM_STATUS_WAITING) {
+    players = players.map((player) =>
+      String(player.uid || "") === nextOwnerUid ? { ...player, isReady: false } : player
+    );
+  }
+
+  transaction.update(snapshot.ref, {
+    ownerUid: nextOwnerUid,
+    players,
+    spectators,
+    currentTurnSeat: players.length ? nextTurnSeat : 0,
+    updatedAt: FieldValue.serverTimestamp(),
+    updatedAtMs: Date.now(),
+  });
+}
+
+function pseudoRandom(seed) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
 }
 
 function buildNoticeId(title, date) {
