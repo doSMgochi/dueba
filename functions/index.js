@@ -22,6 +22,8 @@ const YACHT_MAX_PLAYERS = 4;
 const YACHT_DICE_COUNT = 5;
 const YACHT_ROLL_ANIMATION_MS = 3400;
 const YACHT_TURN_LIMIT_MS = 30000;
+const YACHT_DIE_CENTER_LIMIT = 2.08;
+const YACHT_STALE_FINISH_MS = 6 * 60 * 60 * 1000;
 const YACHT_ROOM_STATUS_WAITING = "waiting";
 const YACHT_ROOM_STATUS_PLAYING = "playing";
 const YACHT_ROOM_STATUS_FINISHED = "finished";
@@ -149,6 +151,56 @@ exports.findLoginIdByEmail = onCall(async (request) => {
   }
 
   return { loginId: String(snapshot.docs[0].data().loginId || "") };
+});
+
+exports.claimActiveSession = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Login is required.");
+  }
+
+  const sessionId = String(request.data?.sessionId || "").trim();
+  if (!sessionId || sessionId.length > 120) {
+    throw new HttpsError("invalid-argument", "Invalid session id.");
+  }
+
+  const profileSnapshot = await findUserSnapshotByUid(request.auth.uid);
+  if (!profileSnapshot) {
+    throw new HttpsError("not-found", "User profile was not found.");
+  }
+
+  let activeRoom = null;
+  try {
+    activeRoom = await findActiveYachtRoomForUid(request.auth.uid);
+  } catch (error) {
+    console.warn("Failed to restore active yacht room while claiming session", error);
+  }
+  const sessionUpdate = {
+    activeSessionId: sessionId,
+    activeSessionUpdatedAt: FieldValue.serverTimestamp(),
+  };
+  if (activeRoom) {
+    sessionUpdate.activeYachtRoomId = activeRoom.roomId;
+    sessionUpdate.activeYachtRole = activeRoom.role;
+    sessionUpdate.activeYachtUpdatedAt = FieldValue.serverTimestamp();
+  }
+
+  await profileSnapshot.ref.update({
+    ...sessionUpdate,
+  });
+
+  return {
+    profile: {
+      docId: profileSnapshot.id,
+      ...serialize(profileSnapshot.data()),
+      activeSessionId: sessionId,
+      ...(activeRoom
+        ? {
+            activeYachtRoomId: activeRoom.roomId,
+            activeYachtRole: activeRoom.role,
+          }
+        : {}),
+    },
+  };
 });
 
 exports.getDashboardData = onCall(async (request) => {
@@ -385,7 +437,7 @@ exports.createItemDefinition = onCall(async (request) => {
     sellInShop = true,
   } = request.data || {};
 
-  const normalizedName = String(name || "").trim();
+  const normalizedName = normalizeSystemItemName(name);
   if (!normalizedName) {
     throw new HttpsError("invalid-argument", "Item name is required.");
   }
@@ -446,7 +498,7 @@ exports.updateItemDefinition = onCall(async (request) => {
   } = request.data || {};
 
   const normalizedItemId = String(itemId || "").trim();
-  const normalizedName = String(name || "").trim();
+  const normalizedName = normalizeSystemItemName(name);
   if (!normalizedItemId || !normalizedName) {
     throw new HttpsError("invalid-argument", "Item id and name are required.");
   }
@@ -749,13 +801,14 @@ exports.sendParcel = onCall(async (request) => {
     throw new HttpsError("not-found", "보내는 사람 프로필을 찾지 못했습니다.");
   }
 
-  const { targetCharacterName, itemKeys = [], currencyAmount = 0, useWrapping = false } = request.data || {};
+  const { targetCharacterName, itemKeys = [], currencyAmount = 0, chargeAmount = 0, useWrapping = false } = request.data || {};
   const receiverCharacterName = String(targetCharacterName || "").trim();
   const normalizedItemKeys = Array.isArray(itemKeys)
     ? itemKeys.map((itemKey) => String(itemKey || "").trim()).filter(Boolean)
     : [];
-  const numericCurrencyAmount = Math.max(0, Number(currencyAmount || 0));
+  const numericCurrencyAmount = normalizeNonNegativeCurrency(currencyAmount);
   const wantsWrapping = Boolean(useWrapping);
+  const numericChargeAmount = wantsWrapping ? 0 : normalizeNonNegativeCurrency(chargeAmount);
 
   if (!receiverCharacterName) {
     throw new HttpsError("invalid-argument", "받는 사람 캐릭터명을 입력해 주세요.");
@@ -777,6 +830,7 @@ exports.sendParcel = onCall(async (request) => {
 
   const parcelRef = db.collection("parcels").doc();
 
+  const giftedItemsForNotification = [];
   await db.runTransaction(async (transaction) => {
     const currentSenderSnapshot = await transaction.get(senderSnapshot.ref);
     if (!currentSenderSnapshot.exists) {
@@ -800,13 +854,13 @@ exports.sendParcel = onCall(async (request) => {
       if (itemIndex === -1) {
         throw new HttpsError("failed-precondition", "선택한 아이템이 인벤토리에 없어서 보낼 수 없습니다.");
       }
-      giftedItems.push(inventory.splice(itemIndex, 1)[0]);
+      giftedItems.push(normalizeSystemInventoryItem(inventory.splice(itemIndex, 1)[0]));
     }
 
     if (wantsWrapping) {
-      const wrappingIndex = inventory.findIndex((item) => item?.name === "포장지");
+      const wrappingIndex = inventory.findIndex(isDeliveryBoxItem);
       if (wrappingIndex === -1) {
-        throw new HttpsError("failed-precondition", "포장지를 사용하려면 인벤토리에 포장지가 있어야 합니다.");
+        throw new HttpsError("failed-precondition", "택배 상자를 사용하려면 인벤토리에 택배 상자가 있어야 합니다.");
       }
       inventory.splice(wrappingIndex, 1);
     }
@@ -825,13 +879,16 @@ exports.sendParcel = onCall(async (request) => {
       item: giftedItems[0] || null,
       items: giftedItems,
       currencyAmount: numericCurrencyAmount,
+      chargeAmount: numericChargeAmount,
       wrapped: wantsWrapping,
+      contentRevealed: false,
       canReject: true,
       status: "pending",
       createdAt: FieldValue.serverTimestamp(),
       autoAcceptAfterMs: Date.now() + 24 * 60 * 60 * 1000,
       updatedAt: FieldValue.serverTimestamp(),
     });
+    giftedItemsForNotification.push(...giftedItems);
   });
 
   await createNotification({
@@ -843,10 +900,11 @@ exports.sendParcel = onCall(async (request) => {
         parcelId: parcelRef.id,
         wrapped: wantsWrapping,
         preview: wantsWrapping
-          ? "포장된 소포가 도착했습니다."
+          ? "택배 상자로 포장된 소포가 도착했습니다."
           : buildParcelPreview({
-              itemNames: giftedItems.map((item) => item?.name).filter(Boolean),
+              itemNames: giftedItemsForNotification.map((item) => item?.name).filter(Boolean),
               currencyAmount: numericCurrencyAmount,
+              chargeAmount: numericChargeAmount,
             }),
       },
     });
@@ -858,7 +916,7 @@ exports.respondParcel = onCall(async (request) => {
   const parcelId = String(request.data?.parcelId || "").trim();
   const action = String(request.data?.action || "").trim();
 
-  if (!parcelId || !["accept", "reject"].includes(action)) {
+  if (!parcelId || !["accept", "reject", "reveal"].includes(action)) {
     throw new HttpsError("invalid-argument", "소포 처리 방식이 올바르지 않습니다.");
   }
 
@@ -911,6 +969,9 @@ exports.useInventoryItem = onCall(async (request) => {
   }
 
   const usedItem = inventory[itemIndex];
+  if (isHammerItem(usedItem) || isDeliveryBoxItem(usedItem) || isDisposalPermitItem(usedItem)) {
+    throw new HttpsError("failed-precondition", "시스템 처리용 물품은 인벤토리에서 직접 사용할 수 없습니다.");
+  }
   const itemDefinitionSnapshot = usedItem.itemId
     ? await db.collection("item-db").doc(String(usedItem.itemId)).get()
     : null;
@@ -1015,6 +1076,7 @@ exports.yachtAction = onCall(async (request) => {
         currentTurnSeat: 0,
         actionDeadlineAtMs: 0,
         rollResolveAtMs: 0,
+        diceMotion: null,
         visualDiceState: null,
         rewardPlan: null,
         createdAt: FieldValue.serverTimestamp(),
@@ -1122,30 +1184,108 @@ exports.yachtAction = onCall(async (request) => {
           throw new HttpsError("failed-precondition", resolveYachtStartError(room, uid));
         }
 
-        const players = (Array.isArray(room.players) ? room.players : []).map((player) =>
-          finalizeYachtPlayer({
-            ...player,
-            isReady: false,
-            rank: 0,
-            rewardCurrency: 0,
-            scoreSheet: createEmptyYachtScoreSheet(),
-          })
-        );
+        const startSeed = Date.now();
+        const players = (Array.isArray(room.players) ? room.players : [])
+          .map((player, index) => ({
+            player,
+            order: pseudoRandom(startSeed + index * 97 + hashYachtString(player.uid || player.characterName || "")),
+          }))
+          .sort((left, right) => left.order - right.order)
+          .map(({ player }) =>
+            finalizeYachtPlayer({
+              ...player,
+              isReady: false,
+              rank: 0,
+              rewardCurrency: 0,
+              scoreSheet: createEmptyYachtScoreSheet(),
+            })
+          );
 
-        transaction.update(snapshot.ref, {
+        const startedRoom = {
+          title: String(room.title || "요트 방"),
+          ownerUid: String(room.ownerUid || ""),
           players,
+          spectators: Array.isArray(room.spectators) ? room.spectators : [],
           status: YACHT_ROOM_STATUS_PLAYING,
           actionPhase: YACHT_PHASE_AWAITING_ROLL,
           currentTurnSeat: 0,
           rollCount: 0,
           dice: [1, 1, 1, 1, 1],
           heldDice: [false, false, false, false, false],
-          diceSeed: Date.now(),
-          actionDeadlineAtMs: Date.now() + YACHT_TURN_LIMIT_MS,
+          diceSeed: startSeed,
+          actionDeadlineAtMs: startSeed + YACHT_TURN_LIMIT_MS,
           rollResolveAtMs: 0,
+          diceMotion: null,
           visualDiceState: null,
-          updatedAt: FieldValue.serverTimestamp(),
+          emoteEvents: Array.isArray(room.emoteEvents) ? room.emoteEvents : [],
+          rewardPlan: room.rewardPlan || null,
+          createdAtMs: Number(room.createdAtMs || startSeed),
           updatedAtMs: Date.now(),
+        };
+
+        transaction.update(snapshot.ref, {
+          players: startedRoom.players,
+          status: startedRoom.status,
+          actionPhase: startedRoom.actionPhase,
+          currentTurnSeat: startedRoom.currentTurnSeat,
+          rollCount: startedRoom.rollCount,
+          dice: startedRoom.dice,
+          heldDice: startedRoom.heldDice,
+          diceSeed: startedRoom.diceSeed,
+          actionDeadlineAtMs: startedRoom.actionDeadlineAtMs,
+          rollResolveAtMs: startedRoom.rollResolveAtMs,
+          diceMotion: startedRoom.diceMotion,
+          visualDiceState: startedRoom.visualDiceState,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: startedRoom.updatedAtMs,
+        });
+        return { ok: true, room: startedRoom };
+      });
+    case "send-emote":
+      return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
+        const room = snapshot.data();
+        const allowedEmotes = new Set([
+          "joy",
+          "astonished",
+          "cry",
+          "thinking",
+          "pleading",
+          "scream",
+          "cool",
+          "woozy",
+          "wink",
+        ]);
+        const emote = String(request.data?.emote || "").trim();
+        if (!allowedEmotes.has(emote)) {
+          throw new HttpsError("invalid-argument", "지원하지 않는 감정표현입니다.");
+        }
+
+        const members = [
+          ...(Array.isArray(room.players) ? room.players : []),
+          ...(Array.isArray(room.spectators) ? room.spectators : []),
+        ];
+        const member = members.find((item) => String(item.uid || "") === uid);
+        if (!member) {
+          throw new HttpsError("permission-denied", "방에 있는 사람만 감정표현을 보낼 수 있습니다.");
+        }
+
+        const now = Date.now();
+        const previousEvents = Array.isArray(room.emoteEvents) ? room.emoteEvents : [];
+        const emoteEvents = previousEvents
+          .filter((event) => now - Number(event.createdAtMs || 0) < 15000)
+          .slice(-11);
+        emoteEvents.push({
+          id: `${now}-${uid.slice(0, 8)}`,
+          uid,
+          characterName: String(member.characterName || "플레이어").slice(0, 24),
+          emote,
+          createdAtMs: now,
+        });
+
+        transaction.update(snapshot.ref, {
+          emoteEvents,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtMs: now,
         });
         return { ok: true };
       });
@@ -1162,6 +1302,7 @@ exports.yachtAction = onCall(async (request) => {
         const heldDice = normalizeYachtHeldDice(room.heldDice);
         const rolledDice = buildYachtRolledDice(seed, nextRollCount);
         const dice = previousDice.map((value, index) => (heldDice[index] ? value : rolledDice[index]));
+        const diceMotion = buildYachtDiceMotion(seed, dice, heldDice);
 
         transaction.update(snapshot.ref, {
           dice,
@@ -1170,6 +1311,7 @@ exports.yachtAction = onCall(async (request) => {
           rollCount: nextRollCount,
           actionPhase: YACHT_PHASE_ROLLING,
           rollResolveAtMs: Date.now() + YACHT_ROLL_ANIMATION_MS,
+          diceMotion,
           visualDiceState: null,
           updatedAt: FieldValue.serverTimestamp(),
           updatedAtMs: Date.now(),
@@ -1201,12 +1343,16 @@ exports.yachtAction = onCall(async (request) => {
               normalizeYachtDice(room.dice)
             )
           : room.visualDiceState || null;
-        transaction.update(snapshot.ref, {
+        const updatePayload = {
           heldDice,
           visualDiceState: nextVisualDiceState,
           updatedAt: FieldValue.serverTimestamp(),
           updatedAtMs: Date.now(),
-        });
+        };
+        if (nextVisualDiceState?.values) {
+          updatePayload.dice = normalizeYachtDice(nextVisualDiceState.values);
+        }
+        transaction.update(snapshot.ref, updatePayload);
         return { ok: true };
       });
     case "sync-dice":
@@ -1216,9 +1362,6 @@ exports.yachtAction = onCall(async (request) => {
         const diceSeed = Number(request.data?.diceSeed || 0);
         if (String(room.status || "") !== YACHT_ROOM_STATUS_PLAYING) {
           throw new HttpsError("failed-precondition", "진행 중인 방만 동기화할 수 있습니다.");
-        }
-        if (String(room.actionPhase || "") === YACHT_PHASE_ROLLING) {
-          throw new HttpsError("failed-precondition", "굴리는 중에는 결과를 동기화할 수 없습니다.");
         }
         if (String(getCurrentYachtTurnPlayer(room)?.uid || "") !== String(uid || "")) {
           throw new HttpsError("failed-precondition", "현재 차례 플레이어만 결과를 동기화할 수 있습니다.");
@@ -1233,12 +1376,19 @@ exports.yachtAction = onCall(async (request) => {
           Number(room.diceSeed || 0),
           dice
         );
-        transaction.update(snapshot.ref, {
+        const updatePayload = {
           dice,
           visualDiceState,
+          rollResolveAtMs: 0,
           updatedAt: FieldValue.serverTimestamp(),
           updatedAtMs: Date.now(),
-        });
+        };
+        if (String(room.actionPhase || "") === YACHT_PHASE_ROLLING) {
+          updatePayload.actionPhase = YACHT_PHASE_AWAITING_ROLL;
+          updatePayload.actionDeadlineAtMs = Date.now() + YACHT_TURN_LIMIT_MS;
+          updatePayload.diceMotion = null;
+        }
+        transaction.update(snapshot.ref, updatePayload);
         return { ok: true };
       });
     case "reset-holds":
@@ -1390,6 +1540,7 @@ exports.yachtAction = onCall(async (request) => {
           diceSeed: Date.now(),
           actionDeadlineAtMs: 0,
           rollResolveAtMs: 0,
+          diceMotion: null,
           visualDiceState: null,
           rewardPlan: null,
           createdAt: FieldValue.serverTimestamp(),
@@ -1433,6 +1584,7 @@ exports.yachtAction = onCall(async (request) => {
             const heldDice = normalizeYachtHeldDice(room.heldDice);
             const rolledDice = buildYachtRolledDice(seed, nextRollCount);
             const dice = previousDice.map((value, index) => (heldDice[index] ? value : rolledDice[index]));
+            const diceMotion = buildYachtDiceMotion(seed, dice, heldDice);
             transaction.update(snapshot.ref, {
               dice,
               heldDice,
@@ -1441,6 +1593,7 @@ exports.yachtAction = onCall(async (request) => {
               actionPhase: YACHT_PHASE_ROLLING,
               actionDeadlineAtMs: 0,
               rollResolveAtMs: Date.now() + YACHT_ROLL_ANIMATION_MS,
+              diceMotion,
               visualDiceState: null,
               updatedAt: FieldValue.serverTimestamp(),
               updatedAtMs: Date.now(),
@@ -1486,6 +1639,10 @@ exports.spinRoulette = onRequest(async (_req, res) => {
 
 exports.autoAcceptExpiredParcels = onSchedule("every 15 minutes", async () => {
   await processAllExpiredParcels();
+});
+
+exports.advanceStaleYachtRooms = onSchedule("every 5 minutes", async () => {
+  await processStaleYachtRooms();
 });
 
 function assertAuthenticated(request) {
@@ -1639,16 +1796,51 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
     const receiverInventory = Array.isArray(receiverData.inventory) ? [...receiverData.inventory] : [];
     let senderCurrency = Number(senderData.currency || 0);
     let receiverCurrency = Number(receiverData.currency || 0);
+    const chargeAmount = normalizeNonNegativeCurrency(currentParcel.chargeAmount);
+
+    if (action === "reveal") {
+      if (!currentParcel.wrapped) {
+        throw new HttpsError("failed-precondition", "일반 소포는 이미 내용물을 확인할 수 있습니다.");
+      }
+      if (currentParcel.contentRevealed) {
+        return;
+      }
+      const hammerIndex = receiverInventory.findIndex(isHammerItem);
+      if (hammerIndex === -1) {
+        throw new HttpsError("failed-precondition", "택배 상자 내용을 확인하려면 망치가 필요합니다.");
+      }
+      receiverInventory.splice(hammerIndex, 1);
+      transaction.update(receiverSnapshot.ref, {
+        inventory: receiverInventory,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      transaction.update(parcelRef, {
+        contentRevealed: true,
+        revealedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return;
+    }
 
     if (action === "reject" && currentParcel.wrapped) {
-      const rejectTicketIndex = receiverInventory.findIndex((item) => item?.name === "거절권");
+      const rejectTicketIndex = receiverInventory.findIndex(isDisposalPermitItem);
       if (rejectTicketIndex === -1) {
-        throw new HttpsError("failed-precondition", "포장된 소포를 거절하려면 거절권이 필요합니다.");
+        throw new HttpsError("failed-precondition", "택배 상자로 온 소포를 거절하려면 폐기 승인서가 필요합니다.");
       }
       receiverInventory.splice(rejectTicketIndex, 1);
     }
 
     if (action === "accept") {
+      if (chargeAmount > 0) {
+        if (receiverCurrency < chargeAmount) {
+          throw new HttpsError(
+            "failed-precondition",
+            `청구 금액 ${chargeAmount}환을 지불하기 전까지 소포는 보류됩니다. 현재 ${receiverCurrency}환을 보유 중입니다.`
+          );
+        }
+        receiverCurrency -= chargeAmount;
+        senderCurrency += chargeAmount;
+      }
       if (Array.isArray(currentParcel.items) && currentParcel.items.length) {
         receiverInventory.push(...currentParcel.items);
       } else if (currentParcel.item) {
@@ -1660,6 +1852,12 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
         currency: receiverCurrency,
         updatedAt: FieldValue.serverTimestamp(),
       });
+      if (chargeAmount > 0) {
+        transaction.update(senderSnapshot.ref, {
+          currency: senderCurrency,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
     } else {
       if (Array.isArray(currentParcel.items) && currentParcel.items.length) {
         senderInventory.push(...currentParcel.items);
@@ -1686,6 +1884,10 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
     });
   });
 
+  if (action === "reveal") {
+    return;
+  }
+
   await createNotification({
     targetUid: parcel.senderUid,
     targetCharacterName: parcel.senderCharacterName,
@@ -1693,8 +1895,8 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
     message:
       action === "accept"
         ? automatic
-          ? `${parcel.receiverCharacterName}님의 소포가 1일 경과로 자동 수락되었습니다.`
-          : `${parcel.receiverCharacterName}님이 소포를 수락했습니다.`
+          ? `${parcel.receiverCharacterName}님의 소포가 1일 경과로 자동 수령되었습니다.${normalizeNonNegativeCurrency(parcel.chargeAmount) > 0 ? ` 청구 비용 ${normalizeNonNegativeCurrency(parcel.chargeAmount)}환을 받았습니다.` : ""}`
+          : `${parcel.receiverCharacterName}님이 소포를 수령했습니다.${normalizeNonNegativeCurrency(parcel.chargeAmount) > 0 ? ` 청구 비용 ${normalizeNonNegativeCurrency(parcel.chargeAmount)}환을 받았습니다.` : ""}`
         : `${parcel.receiverCharacterName}님이 소포를 거절했습니다.`,
     payload: { parcelId, automatic: Boolean(automatic) },
   });
@@ -1704,13 +1906,13 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
       targetUid: parcel.receiverUid,
       targetCharacterName: parcel.receiverCharacterName,
       type: "parcel-auto-accepted",
-      message: `${parcel.senderCharacterName}님의 소포가 1일 경과로 자동 수락되었습니다.`,
+      message: `${parcel.senderCharacterName}님의 소포가 1일 경과로 자동 수령되었습니다.`,
       payload: { parcelId },
     });
   }
 }
 
-function buildParcelPreview({ itemName, itemNames = [], currencyAmount }) {
+function buildParcelPreview({ itemName, itemNames = [], currencyAmount, chargeAmount }) {
   const parts = [];
   if (Array.isArray(itemNames) && itemNames.length) {
     parts.push(`아이템 ${itemNames.join(", ")}`);
@@ -1720,7 +1922,15 @@ function buildParcelPreview({ itemName, itemNames = [], currencyAmount }) {
   if (Number(currencyAmount || 0) > 0) {
     parts.push(`환 ${Number(currencyAmount || 0)}`);
   }
+  if (Number(chargeAmount || 0) > 0) {
+    parts.push(`청구 ${Number(chargeAmount || 0)}환`);
+  }
   return parts.join(" / ") || "소포가 도착했습니다.";
+}
+
+function normalizeNonNegativeCurrency(value) {
+  const numericValue = Number(value || 0);
+  return Number.isFinite(numericValue) ? Math.max(0, numericValue) : 0;
 }
 
 async function runYachtRoomMutation(roomId, handler) {
@@ -1833,7 +2043,7 @@ function pickBestYachtScoreCategory(scoreSheet, dice) {
 function canYachtHostStartGame(room, uid) {
   if (String(room.ownerUid || "") !== String(uid || "")) return false;
   const players = Array.isArray(room.players) ? room.players : [];
-  if (players.length < 2) return false;
+  if (players.length < 1) return false;
   return players
     .filter((player) => String(player.uid || "") !== String(room.ownerUid || ""))
     .every((player) => Boolean(player.isReady));
@@ -1844,8 +2054,8 @@ function resolveYachtStartError(room, uid) {
     return "방장만 게임을 시작할 수 있습니다.";
   }
   const players = Array.isArray(room.players) ? room.players : [];
-  if (players.length < 2) {
-    return "최소 2명 이상 있어야 게임을 시작할 수 있습니다.";
+  if (players.length < 1) {
+    return "플레이어가 있어야 게임을 시작할 수 있습니다.";
   }
   const waitingPlayers = players.filter(
     (player) => String(player.uid || "") !== String(room.ownerUid || "") && !player.isReady
@@ -1985,6 +2195,150 @@ function buildYachtRolledDice(seedBase, rollCount) {
   });
 }
 
+function buildYachtBoardPositions(seedBase) {
+  return Array.from({ length: YACHT_DICE_COUNT }, (_, index) => {
+    const seed = seedBase * 31 + index * 17 + 7;
+    const angle = (Math.PI * 2 * index) / YACHT_DICE_COUNT + pseudoRandom(seed + 1) * 0.42;
+    const radius = 8 + pseudoRandom(seed + 2) * 4.2;
+    return {
+      x: 50 + Math.cos(angle) * radius,
+      y: 50 + Math.sin(angle) * radius,
+    };
+  });
+}
+
+function clampYachtPlanarPosition(x, z, limit = YACHT_DIE_CENTER_LIMIT) {
+  const distance = Math.hypot(x, z);
+  if (distance <= limit) return { x, z };
+  const scale = limit / Math.max(distance, 0.0001);
+  return {
+    x: x * scale,
+    z: z * scale,
+  };
+}
+
+function resolveYachtNonOverlappingPlanarPosition(x, z, occupiedEntries = [], limit = YACHT_DIE_CENTER_LIMIT, minGap = 0.78) {
+  let nextX = x;
+  let nextZ = z;
+
+  for (let iteration = 0; iteration < 16; iteration += 1) {
+    let moved = false;
+    occupiedEntries.forEach((entry, occupiedIndex) => {
+      const dx = nextX - Number(entry?.x || 0);
+      const dz = nextZ - Number(entry?.z || 0);
+      const distance = Math.hypot(dx, dz);
+      if (distance >= minGap) return;
+
+      const angle = distance > 0.0001
+        ? Math.atan2(dz, dx)
+        : ((occupiedIndex + 1) * Math.PI * 0.73) % (Math.PI * 2);
+      const push = minGap - distance + 0.02;
+      nextX += Math.cos(angle) * push;
+      nextZ += Math.sin(angle) * push;
+      const clamped = clampYachtPlanarPosition(nextX, nextZ, limit);
+      nextX = clamped.x;
+      nextZ = clamped.z;
+      moved = true;
+    });
+    if (!moved) break;
+  }
+
+  return { x: nextX, z: nextZ };
+}
+
+function buildYachtDiceMotion(seedBase, dice, heldDice) {
+  const positions = buildYachtBoardPositions(seedBase);
+  const occupiedPlanarEntries = [];
+  const playRadius = YACHT_DIE_CENTER_LIMIT;
+
+  const diceEntries = normalizeYachtDice(dice).map((value, index) => {
+    let px = ((positions[index].x - 50) / 50) * 5;
+    let pz = ((positions[index].y - 50) / 50) * 5;
+    const clamped = clampYachtPlanarPosition(px, pz, playRadius);
+    px = clamped.x;
+    pz = clamped.z;
+
+    const occupiedByOthers = occupiedPlanarEntries.filter((entry) => entry.index !== index);
+    const restingPlanar = resolveYachtNonOverlappingPlanarPosition(px, pz, occupiedByOthers, playRadius);
+    px = restingPlanar.x;
+    pz = restingPlanar.z;
+    occupiedPlanarEntries.push({ index, x: px, z: pz, held: Boolean(heldDice[index]) });
+
+    const throwSide = Math.floor(pseudoRandom(seedBase + index * 101) * 4);
+    const sideDrift = (pseudoRandom(seedBase + index * 103) - 0.5) * 0.32;
+    let startX = px;
+    let startZ = pz;
+    let velocityX = 0;
+    let velocityZ = 0;
+
+    if (throwSide === 0) {
+      startX = -playRadius + 0.2;
+      startZ = pz + sideDrift;
+      velocityX = 6.9 + pseudoRandom(seedBase + index * 107) * 1.1;
+      velocityZ = (0.5 - pseudoRandom(seedBase + index * 109)) * 1.35;
+    } else if (throwSide === 1) {
+      startX = playRadius - 0.2;
+      startZ = pz + sideDrift;
+      velocityX = -6.9 - pseudoRandom(seedBase + index * 107) * 1.1;
+      velocityZ = (0.5 - pseudoRandom(seedBase + index * 109)) * 1.35;
+    } else if (throwSide === 2) {
+      startX = px + sideDrift;
+      startZ = -playRadius + 0.2;
+      velocityX = (0.5 - pseudoRandom(seedBase + index * 107)) * 1.35;
+      velocityZ = 6.9 + pseudoRandom(seedBase + index * 109) * 1.1;
+    } else {
+      startX = px + sideDrift;
+      startZ = playRadius - 0.2;
+      velocityX = (0.5 - pseudoRandom(seedBase + index * 107)) * 1.35;
+      velocityZ = -6.9 - pseudoRandom(seedBase + index * 109) * 1.1;
+    }
+
+    const startPlanar = resolveYachtNonOverlappingPlanarPosition(
+      startX,
+      startZ,
+      occupiedPlanarEntries.filter((entry) => entry.held && entry.index !== index),
+      playRadius - 0.08,
+      0.72
+    );
+
+    return {
+      index,
+      value,
+      held: Boolean(heldDice[index]),
+      start: {
+        x: startPlanar.x,
+        y: 0.76 + pseudoRandom(seedBase + index * 113) * 0.12,
+        z: startPlanar.z,
+      },
+      velocity: {
+        x: velocityX,
+        y: -0.14 - pseudoRandom(seedBase + index * 127) * 0.12,
+        z: velocityZ,
+      },
+      angularVelocity: {
+        x: 4.4 + pseudoRandom(seedBase + index * 131) * 2.0,
+        y: 3.7 + pseudoRandom(seedBase + index * 137) * 1.5,
+        z: 4.4 + pseudoRandom(seedBase + index * 139) * 2.0,
+      },
+      final: {
+        x: px,
+        y: 0.42,
+        z: pz,
+        yaw: Math.floor(pseudoRandom(seedBase + index * 149 + value * 17) * 4) * (Math.PI / 2),
+      },
+      rollingQuaternionSeed: seedBase + index * 151,
+      settlePhase: pseudoRandom(seedBase + index * 157) * Math.PI * 2,
+    };
+  });
+
+  return {
+    diceSeed: seedBase,
+    startedAtMs: Date.now(),
+    durationMs: YACHT_ROLL_ANIMATION_MS,
+    dice: diceEntries,
+  };
+}
+
 function assignYachtRanks(players) {
   const sorted = [...players].sort((left, right) => {
     if (Number(right.finalScore || 0) !== Number(left.finalScore || 0)) {
@@ -2014,6 +2368,7 @@ function applyYachtPostScoreUpdate(transaction, roomRef, players, seat) {
       heldDice: [false, false, false, false, false],
       actionDeadlineAtMs: 0,
       rollResolveAtMs: 0,
+      diceMotion: null,
       visualDiceState: null,
       updatedAt: FieldValue.serverTimestamp(),
       updatedAtMs: Date.now(),
@@ -2031,10 +2386,96 @@ function applyYachtPostScoreUpdate(transaction, roomRef, players, seat) {
     diceSeed: Date.now(),
     actionDeadlineAtMs: Date.now() + YACHT_TURN_LIMIT_MS,
     rollResolveAtMs: 0,
+    diceMotion: null,
     visualDiceState: null,
     updatedAt: FieldValue.serverTimestamp(),
     updatedAtMs: Date.now(),
   });
+}
+
+async function processStaleYachtRooms() {
+  const snapshot = await db
+    .collection("yacht-rooms")
+    .where("status", "==", YACHT_ROOM_STATUS_PLAYING)
+    .limit(50)
+    .get();
+
+  for (const docSnapshot of snapshot.docs) {
+    await db.runTransaction(async (transaction) => {
+      const freshSnapshot = await transaction.get(docSnapshot.ref);
+      if (!freshSnapshot.exists) return;
+      applyYachtScheduledAdvance(transaction, freshSnapshot.ref, freshSnapshot.data(), Date.now());
+    });
+  }
+}
+
+function applyYachtScheduledAdvance(transaction, roomRef, room, now) {
+  if (String(room.status || "") !== YACHT_ROOM_STATUS_PLAYING) return;
+
+  const lastUpdatedAtMs = Number(room.updatedAtMs || 0);
+  const players = [...(Array.isArray(room.players) ? room.players : [])];
+  if (!players.length) return;
+
+  if (lastUpdatedAtMs && now - lastUpdatedAtMs >= YACHT_STALE_FINISH_MS) {
+    transaction.update(roomRef, {
+      players: assignYachtRanks(players.map((player) => finalizeYachtPlayer(player))),
+      status: YACHT_ROOM_STATUS_FINISHED,
+      actionPhase: YACHT_PHASE_FINISHED,
+      rollCount: 0,
+      heldDice: [false, false, false, false, false],
+      actionDeadlineAtMs: 0,
+      rollResolveAtMs: 0,
+      diceMotion: null,
+      visualDiceState: null,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedAtMs: now,
+    });
+    return;
+  }
+
+  if (String(room.actionPhase || "") === YACHT_PHASE_ROLLING && Number(room.rollResolveAtMs || 0) <= now) {
+    transaction.update(roomRef, {
+      actionPhase: YACHT_PHASE_AWAITING_ROLL,
+      actionDeadlineAtMs: now + YACHT_TURN_LIMIT_MS,
+      rollResolveAtMs: 0,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedAtMs: now,
+    });
+    return;
+  }
+
+  if (
+    String(room.actionPhase || "") !== YACHT_PHASE_AWAITING_ROLL ||
+    Number(room.actionDeadlineAtMs || 0) > now
+  ) {
+    return;
+  }
+
+  let dice = normalizeYachtDice(room.dice);
+  const heldDice = normalizeYachtHeldDice(room.heldDice);
+  let rollCount = Number(room.rollCount || 0);
+  while (rollCount < 3) {
+    rollCount += 1;
+    const seed = now + rollCount;
+    const rolledDice = buildYachtRolledDice(seed, rollCount);
+    dice = dice.map((value, index) => (heldDice[index] ? value : rolledDice[index]));
+  }
+
+  const seat = Number(room.currentTurnSeat || 0);
+  const player = players[seat];
+  if (!player) return;
+  const bestCategoryId = pickBestYachtScoreCategory(player.scoreSheet, dice);
+  if (!bestCategoryId) return;
+
+  const scoreSheet = {
+    ...(player.scoreSheet || createEmptyYachtScoreSheet()),
+    [bestCategoryId]: {
+      score: calculateYachtCategoryScore(bestCategoryId, dice),
+      locked: true,
+    },
+  };
+  players[seat] = finalizeYachtPlayer({ ...player, scoreSheet });
+  applyYachtPostScoreUpdate(transaction, roomRef, players, seat);
 }
 
 function applyYachtLeaveRoom(transaction, snapshot, uid) {
@@ -2046,7 +2487,7 @@ function applyYachtLeaveRoom(transaction, snapshot, uid) {
     (spectator) => String(spectator.uid || "") !== String(uid || "")
   );
 
-  if (players.length === 0 && spectators.length === 0) {
+  if (players.length === 0) {
     transaction.delete(snapshot.ref);
     return;
   }
@@ -2088,6 +2529,12 @@ function applyYachtLeaveRoom(transaction, snapshot, uid) {
 function pseudoRandom(seed) {
   const x = Math.sin(seed * 12.9898) * 43758.5453;
   return x - Math.floor(x);
+}
+
+function hashYachtString(value) {
+  return String(value || "").split("").reduce((hash, char) => {
+    return (hash * 31 + char.charCodeAt(0)) % 1000003;
+  }, 17);
 }
 
 function buildNoticeId(title, date) {
@@ -2135,7 +2582,7 @@ function normalizeItemCategory(category) {
 }
 
 function buildInventoryItemFromDefinition(item) {
-  return {
+  return normalizeSystemInventoryItem({
     itemId: item.id || "",
     name: String(item.name || item.id || "아이템").trim(),
     description: String(item.description || "").trim(),
@@ -2144,11 +2591,57 @@ function buildInventoryItemFromDefinition(item) {
     spriteKey: String(item.spriteKey || "").trim(),
     category: normalizeItemCategory(item.category),
     grantedAt: new Date().toISOString(),
-  };
+  });
 }
 
 function buildInventoryItemKey(item) {
   return [item?.itemId || item?.name || "item", item?.grantedAt || "", item?.name || ""].join("::");
+}
+
+function normalizeSystemItemName(name) {
+  const normalized = String(name || "").trim();
+  if (["포장지", "택배상자", "택배 상자"].includes(normalized)) return "택배 상자";
+  if (["거절권", "폐기 승인서"].includes(normalized)) return "폐기 승인서";
+  return normalized;
+}
+
+function normalizeSystemInventoryItem(item) {
+  if (!item || typeof item !== "object") return item;
+  const name = normalizeSystemItemName(item.name);
+  const nextItem = { ...item, name };
+  if (name === "택배 상자") {
+    nextItem.shortLabel = "택배 상자";
+    nextItem.description =
+      nextItem.description && !String(nextItem.description).includes("내용물을 숨겨")
+        ? nextItem.description
+        : "소포의 내용물을 숨겨서 보낼 때 사용하는 시스템 물품입니다.";
+  }
+  if (name === "폐기 승인서") {
+    nextItem.shortLabel = "폐기 승인서";
+    nextItem.description =
+      nextItem.description && !String(nextItem.description).includes("거절")
+        ? nextItem.description
+        : "택배 상자로 온 소포를 거절할 때 사용하는 시스템 물품입니다.";
+  }
+  return nextItem;
+}
+
+function isNamedSystemItem(item, names) {
+  const itemName = normalizeSystemItemName(item?.name);
+  const itemId = String(item?.itemId || "").replace(/\s+/g, "").toLowerCase();
+  return names.has(itemName) || (names.has("택배 상자") && itemId.includes("택배")) || (names.has("폐기 승인서") && itemId.includes("거절"));
+}
+
+function isDeliveryBoxItem(item) {
+  return isNamedSystemItem(item, new Set(["택배 상자"]));
+}
+
+function isDisposalPermitItem(item) {
+  return isNamedSystemItem(item, new Set(["폐기 승인서"]));
+}
+
+function isHammerItem(item) {
+  return normalizeSystemItemName(item?.name) === "망치" || String(item?.itemId || "").toLowerCase().includes("hammer");
 }
 
 function buildItemId(name) {
@@ -2179,6 +2672,33 @@ async function findUserSnapshotByUid(uid) {
 
   if (legacySnapshot.exists) {
     return legacySnapshot;
+  }
+
+  return null;
+}
+
+async function findActiveYachtRoomForUid(uid) {
+  const safeUid = String(uid || "");
+  if (!safeUid) return null;
+
+  const snapshot = await db
+    .collection("yacht-rooms")
+    .where("status", "in", [YACHT_ROOM_STATUS_WAITING, YACHT_ROOM_STATUS_PLAYING])
+    .orderBy("updatedAtMs", "desc")
+    .limit(100)
+    .get();
+
+  for (const roomDoc of snapshot.docs) {
+    const room = roomDoc.data();
+    const players = Array.isArray(room.players) ? room.players : [];
+    if (players.some((player) => String(player.uid || "") === safeUid)) {
+      return { roomId: roomDoc.id, role: "player" };
+    }
+
+    const spectators = Array.isArray(room.spectators) ? room.spectators : [];
+    if (spectators.some((spectator) => String(spectator.uid || "") === safeUid)) {
+      return { roomId: roomDoc.id, role: "spectator" };
+    }
   }
 
   return null;

@@ -76,6 +76,9 @@ signupForm.addEventListener("submit", async (event) => {
     showToast("회원가입과 로그인을 완료했습니다.");
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    delete loginForm.dataset.pending;
+    if (submitButton) submitButton.disabled = false;
   }
 });
 
@@ -107,6 +110,9 @@ resetPasswordForm.addEventListener("submit", async (event) => {
     showToast("비밀번호 재설정 메일을 보냈습니다.");
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    delete loginForm.dataset.pending;
+    if (submitButton) submitButton.disabled = false;
   }
 });
 
@@ -124,9 +130,13 @@ document.addEventListener(
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (loginForm.dataset.pending === "1") return;
   const payload = Object.fromEntries(new FormData(loginForm).entries());
+  const submitButton = loginForm.querySelector('button[type="submit"]');
 
   try {
+    loginForm.dataset.pending = "1";
+    if (submitButton) submitButton.disabled = true;
     showToast("처리중입니다.");
     await loginWithId(payload.loginId, payload.password);
     loginForm.reset();
@@ -150,12 +160,15 @@ menuTabs.addEventListener("click", (event) => {
   updateDashboard(dashboardState.profile, button.dataset.menuId);
 });
 
-onSignedInUserChanged((profile) => {
+onSignedInUserChanged((profile, meta = {}) => {
   const isLoggedIn = Boolean(profile);
   authView.classList.toggle("hidden", isLoggedIn);
   dashboardView.classList.toggle("hidden", !isLoggedIn);
 
   if (!isLoggedIn) {
+    if (meta?.reason === "session-conflict") {
+      showToast("다른 곳에서 로그인되어 이 화면은 로그아웃되었습니다.", true);
+    }
     lastTeamWarningKey = "";
     dashboardState = {
       profile: null,

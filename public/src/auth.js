@@ -16,6 +16,7 @@ import {
   getDoc,
   getDocs,
   limit,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -42,7 +43,24 @@ const respondParcelCallable = httpsCallable(functions, "respondParcel");
 const useInventoryItemCallable = httpsCallable(functions, "useInventoryItem");
 const listAdminLogsCallable = httpsCallable(functions, "listAdminLogs");
 const listBugReportsCallable = httpsCallable(functions, "listBugReports");
+const claimActiveSessionCallable = httpsCallable(functions, "claimActiveSession");
 const allowedFactions = ["매화", "난초", "국화", "대나무"];
+const ACTIVE_SESSION_STORAGE_KEY = "mahjong-admin-active-session-id";
+let activeSessionUnsubscribe = null;
+let isSigningOutForSessionConflict = false;
+let pendingAuthSignOutReason = "";
+
+window.addEventListener("dueba-session-conflict", async () => {
+  if (!auth.currentUser || isSigningOutForSessionConflict) return;
+  isSigningOutForSessionConflict = true;
+  pendingAuthSignOutReason = "session-conflict";
+  clearActiveSessionWatcher();
+  try {
+    await signOut(auth);
+  } finally {
+    isSigningOutForSessionConflict = false;
+  }
+});
 
 function normalizeLoginId(loginId) {
   return String(loginId || "").trim().toLowerCase();
@@ -129,6 +147,94 @@ function toFriendlyError(error) {
   }
 
   return new Error(errorMap[code] || error.message || "요청을 처리하는 중 오류가 발생했습니다.");
+}
+
+function getLocalSessionId() {
+  try {
+    const existing = window.sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+    if (existing) return existing;
+    const next = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    window.sessionStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+function clearActiveSessionWatcher() {
+  if (typeof activeSessionUnsubscribe === "function") {
+    activeSessionUnsubscribe();
+  }
+  activeSessionUnsubscribe = null;
+}
+
+export function consumeAuthSignOutReason() {
+  const reason = pendingAuthSignOutReason;
+  pendingAuthSignOutReason = "";
+  return reason;
+}
+
+async function claimCurrentSession() {
+  if (!auth.currentUser) {
+    throw new Error("로그인한 유저가 없습니다.");
+  }
+  const activeSessionId = getLocalSessionId();
+
+  try {
+    const result = await claimActiveSessionCallable({ sessionId: activeSessionId });
+    if (result.data?.profile) {
+      return result.data.profile;
+    }
+  } catch (error) {
+    console.warn("Cloud session claim failed; falling back to Firestore update.", error);
+  }
+
+  const profile = await findUserProfileByUid(auth.currentUser.uid);
+  if (!profile) return null;
+
+  try {
+    await updateDoc(doc(db, "users", profile.id), {
+      activeSessionId,
+      activeSessionUpdatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn("Firestore session claim failed; continuing login without single-session enforcement.", error);
+  }
+
+  return {
+    docId: profile.id,
+    ...profile.data,
+    activeSessionId,
+  };
+}
+
+function watchActiveSession(profile, onConflict) {
+  clearActiveSessionWatcher();
+  if (!profile?.docId) return;
+  const localSessionId = getLocalSessionId();
+  let hasSeenLocalSession = false;
+  activeSessionUnsubscribe = onSnapshot(doc(db, "users", profile.docId), async (snapshot) => {
+    if (!snapshot.exists() || !auth.currentUser) return;
+    const activeSessionId = String(snapshot.data()?.activeSessionId || "");
+    if (!activeSessionId || isSigningOutForSessionConflict) return;
+    if (activeSessionId === localSessionId) {
+      hasSeenLocalSession = true;
+      return;
+    }
+    if (!hasSeenLocalSession) {
+      return;
+    }
+
+    isSigningOutForSessionConflict = true;
+    pendingAuthSignOutReason = "session-conflict";
+    clearActiveSessionWatcher();
+    try {
+      await signOut(auth);
+      onConflict?.();
+    } finally {
+      isSigningOutForSessionConflict = false;
+    }
+  });
 }
 
 async function findUserProfileByUid(uid) {
@@ -285,6 +391,7 @@ export async function requestPasswordResetEmail(email) {
 }
 
 export async function logoutUser() {
+  clearActiveSessionWatcher();
   await signOut(auth);
 }
 
@@ -307,12 +414,15 @@ export async function refreshCurrentUserProfile() {
 export function onSignedInUserChanged(callback) {
   return onAuthStateChanged(auth, async (user) => {
     if (!user) {
-      callback(null);
+      clearActiveSessionWatcher();
+      callback(null, { reason: consumeAuthSignOutReason() });
       return;
     }
 
     try {
-      const profile = await refreshCurrentUserProfile();
+      const claimedProfile = await claimCurrentSession();
+      const profile = claimedProfile || (await refreshCurrentUserProfile());
+      watchActiveSession(profile);
       callback(profile);
     } catch (error) {
       console.error(error);

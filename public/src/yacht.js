@@ -22,6 +22,24 @@ const YACHT_ROLL_ANIMATION_MS = 3400;
 const YACHT_TURN_LIMIT_MS = 30000;
 const YACHT_ROOM_LIST_LIMIT = 30;
 const YACHT_PENDING_TIMEOUT_MS = 15000;
+const YACHT_SFX_STORAGE_KEY = "yacht:sfx-settings";
+const YACHT_SFX = {
+  shake: { src: "/assets/sfx/yacht-dice-shake-loop.mp3", volume: 0.42, loop: true },
+  roll: { src: "/assets/sfx/yacht-dice-roll.mp3", volume: 0.72, loop: false },
+  yacht: { src: "/assets/sfx/yacht-cheer.mp3", volume: 0.86, loop: false },
+};
+const YACHT_EMOTE_ICON_BASE_URL = "https://cdn.jsdelivr.net/npm/fluentui-emoji@1.3.0/icons/modern";
+const YACHT_EMOTES = [
+  { id: "joy", label: "^_^", icon: "smiling-face-with-smiling-eyes" },
+  { id: "astonished", label: "\u3147o\u3147", icon: "astonished-face" },
+  { id: "cry", label: "\u3160\u3160", icon: "loudly-crying-face" },
+  { id: "thinking", label: "\ud760", icon: "thinking-face" },
+  { id: "pleading", label: "\ubd88\uc30d\ud55c \ud45c\uc815", icon: "pleading-face" },
+  { id: "scream", label: "\ubb49\ud06c\uc758 \uc808\uaddc", icon: "face-screaming-in-fear" },
+  { id: "cool", label: "\uc120\uae00\ub77c\uc2a4", icon: "smiling-face-with-sunglasses" },
+  { id: "woozy", label: "\ud5e4\ub871\ud5e4\ub871", icon: "face-with-spiral-eyes" },
+  { id: "wink", label: "\uc719\ud06c", icon: "face-blowing-a-kiss" },
+];
 
 const ROOM_STATUS_WAITING = "waiting";
 const ROOM_STATUS_PLAYING = "playing";
@@ -45,8 +63,8 @@ const SCORE_ROWS = [
   { id: "upperSubtotal", label: "\uc0c1\ub2e8 \ud569\uacc4", summary: true },
   { id: "bonus", label: "\ubcf4\ub108\uc2a4 35", summary: true },
   { id: "choice", label: "\ucd08\uc774\uc2a4" },
-  { id: "threeKind", label: "\uc4f0\ub9ac \uc624\ube0c \uc5b4 \uce74\uc778\ub4dc" },
-  { id: "fourKind", label: "\ud3ec\uce74\ub4dc" },
+  { id: "threeKind", label: "\uc138\uac1c \ub3d9\uc77c" },
+  { id: "fourKind", label: "\ub124\uac1c \ub3d9\uc77c" },
   { id: "fullHouse", label: "\ud480\ud558\uc6b0\uc2a4" },
   { id: "smallStraight", label: "\uc2a4\ubab0 \uc2a4\ud2b8\ub808\uc774\ud2b8" },
   { id: "largeStraight", label: "\ub77c\uc9c0 \uc2a4\ud2b8\ub808\uc774\ud2b8" },
@@ -55,6 +73,7 @@ const SCORE_ROWS = [
 ];
 
 const PLAYABLE_CATEGORY_IDS = SCORE_ROWS.filter((row) => !row.summary).map((row) => row.id);
+const SCORE_TABLE_ROWS = SCORE_ROWS.filter((row) => row.id !== "finalScore");
 
 let roomListUnsubscribe = null;
 let activeRoomUnsubscribe = null;
@@ -69,6 +88,16 @@ let boardVisualSyncKey = "";
 let boardVisualSyncPromise = null;
 let boardViewSignature = "";
 let boardMountRequestId = 0;
+const holdRequestKeys = new Set();
+const yachtCelebrationKeys = new Set();
+const renderedYachtEmoteEventIds = new Set();
+const yachtSfxAudio = new Map();
+const yachtSfxLooping = new Map();
+let yachtSfxUnlocked = false;
+let yachtScoreFeedback = null;
+let yachtEmoteCooldownUntilMs = 0;
+let yachtEmotePanelOpen = false;
+let yachtActionUnauthorized = false;
 
 let yachtState = {
   profile: null,
@@ -78,6 +107,188 @@ let yachtState = {
   room: null,
   roomId: "",
 };
+
+function readYachtSfxSettings() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(YACHT_SFX_STORAGE_KEY) || "{}");
+    return {
+      enabled: parsed.enabled !== false,
+      volume: Math.max(0, Math.min(1, Number(parsed.volume ?? 0.65))),
+    };
+  } catch {
+    return { enabled: true, volume: 0.65 };
+  }
+}
+
+function writeYachtSfxSettings(nextSettings) {
+  const settings = {
+    ...readYachtSfxSettings(),
+    ...(nextSettings && typeof nextSettings === "object" ? nextSettings : {}),
+  };
+  settings.enabled = settings.enabled !== false;
+  settings.volume = Math.max(0, Math.min(1, Number(settings.volume ?? 0.65)));
+  try {
+    window.localStorage.setItem(YACHT_SFX_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Settings are optional; private browsing/storage denial should not affect the game.
+  }
+  return settings;
+}
+
+function getYachtSfxAudio(key) {
+  const config = YACHT_SFX[key];
+  if (!config) return null;
+  if (!yachtSfxAudio.has(key)) {
+    const audio = new Audio(config.src);
+    audio.preload = "auto";
+    audio.playsInline = true;
+    audio.loop = Boolean(config.loop);
+    audio.load();
+    yachtSfxAudio.set(key, audio);
+  }
+  return yachtSfxAudio.get(key);
+}
+
+function applyYachtSfxVolume(audio, key, overrideVolume = 1) {
+  const config = YACHT_SFX[key];
+  const settings = readYachtSfxSettings();
+  audio.volume = Math.max(0, Math.min(1, settings.volume * Number(config?.volume || 1) * overrideVolume));
+}
+
+function unlockYachtAudio() {
+  if (yachtSfxUnlocked) return;
+  yachtSfxUnlocked = true;
+  Object.keys(YACHT_SFX).forEach((key) => {
+    const config = YACHT_SFX[key];
+    getYachtSfxAudio(key);
+    const probe = new Audio(config.src);
+    probe.muted = true;
+    probe.playsInline = true;
+    probe.play()
+      .then(() => {
+        probe.pause();
+        probe.currentTime = 0;
+      })
+      .catch(() => {});
+  });
+}
+
+function playYachtSfx(key, options = {}) {
+  const settings = readYachtSfxSettings();
+  if (!settings.enabled) return null;
+  const audio = getYachtSfxAudio(key);
+  if (!audio) return null;
+  audio.loop = Boolean(options.loop ?? YACHT_SFX[key]?.loop);
+  applyYachtSfxVolume(audio, key, Number(options.volume ?? 1));
+  try {
+    audio.currentTime = 0;
+  } catch {
+    // Some browsers disallow seeking before metadata is loaded.
+  }
+  audio.play().catch(() => {});
+  return audio;
+}
+
+function startYachtSfxLoop(key) {
+  const settings = readYachtSfxSettings();
+  if (!settings.enabled || !yachtSfxUnlocked) return;
+  if (yachtSfxLooping.has(key)) return;
+  const audio = playYachtSfx(key, { loop: true });
+  if (audio) yachtSfxLooping.set(key, audio);
+}
+
+function stopYachtSfxLoop(key) {
+  const audio = yachtSfxLooping.get(key);
+  if (!audio) return;
+  audio.pause();
+  try {
+    audio.currentTime = 0;
+  } catch {
+    // noop
+  }
+  yachtSfxLooping.delete(key);
+}
+
+function renderYachtSfxControls() {
+  return renderYachtSfxControlsV2();
+}
+
+function renderYachtSfxControlsV2() {
+  const settings = readYachtSfxSettings();
+  return `
+    <div class="yacht-sfx-controls" aria-label="효과음 설정">
+      <button type="button" class="yacht-sfx-toggle" data-yacht-sfx-toggle aria-label="${settings.enabled ? "효과음 끄기" : "효과음 켜기"}" title="${settings.enabled ? "효과음 켜짐" : "효과음 꺼짐"}">
+        ${renderYachtSfxIcon(settings.enabled)}
+      </button>
+      <label class="yacht-sfx-volume" aria-label="효과음 볼륨">
+        <input type="range" min="0" max="100" value="${Math.round(settings.volume * 100)}" data-yacht-sfx-volume>
+      </label>
+    </div>
+  `;
+}
+
+function renderYachtSfxIcon(enabled) {
+  return `
+    <svg class="yacht-sfx-icon ${enabled ? "is-on" : "is-off"}" viewBox="0 0 32 32" aria-hidden="true">
+      <path class="speaker-box" d="M4 12h6l8-7v22l-8-7H4z"></path>
+      <path class="speaker-wave wave-one" d="M21 11c2 2 2 8 0 10"></path>
+      <path class="speaker-wave wave-two" d="M25 7c4 5 4 13 0 18"></path>
+      ${enabled ? "" : '<path class="speaker-slash" d="M6 5l22 22"></path>'}
+    </svg>
+  `;
+}
+
+function getYachtEmoteDefinition(emoteId) {
+  const normalizedId = String(emoteId || "").trim();
+  return (
+    YACHT_EMOTES.find((emote) => emote.id === normalizedId) || {
+      id: normalizedId,
+      label: normalizedId || "\uac10\uc815",
+      icon: "smiling-face-with-smiling-eyes",
+    }
+  );
+}
+
+function renderYachtEmoteIcon(emoteId) {
+  const emote = getYachtEmoteDefinition(emoteId);
+  const id = emote.id;
+  const classId = YACHT_EMOTES.some((emote) => emote.id === id) ? id : "joy";
+
+  return `
+    <span class="yacht-emote-icon yacht-emote-icon-${escapeHtml(classId)}" aria-hidden="true">
+      <img src="${YACHT_EMOTE_ICON_BASE_URL}/${escapeHtml(emote.icon || "smiling-face-with-smiling-eyes")}.svg" alt="" loading="lazy" decoding="async">
+    </span>
+  `;
+}
+
+function renderYachtEmoteControls() {
+  const isCoolingDown = Date.now() < yachtEmoteCooldownUntilMs;
+  return `
+    <div class="yacht-emote-controls ${yachtEmotePanelOpen ? "is-open" : ""}" aria-label="감정표현">
+      <button type="button" class="yacht-emote-toggle" data-yacht-emote-toggle aria-expanded="${yachtEmotePanelOpen ? "true" : "false"}" title="감정표현">
+        ${renderYachtEmoteIcon("joy")}
+      </button>
+      <div class="yacht-emote-panel" ${yachtEmotePanelOpen ? "" : "hidden"}>
+        ${YACHT_EMOTES.map(
+          (emote) => `
+            <button type="button" class="yacht-emote-button" data-yacht-emote="${escapeHtml(emote.id)}" aria-label="감정표현 ${escapeHtml(emote.label)}" title="${escapeHtml(emote.label)}" ${isCoolingDown ? "disabled" : ""}>
+              ${renderYachtEmoteIcon(emote.id)}
+            </button>
+          `
+        ).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderYachtRoomTools() {
+  return `
+    <div class="yacht-room-tools">
+      ${renderYachtSfxControlsV2()}
+      ${renderYachtEmoteControls()}
+    </div>
+  `;
+}
 
 export function cleanupYachtModule() {
   if (typeof roomListUnsubscribe === "function") roomListUnsubscribe();
@@ -94,10 +305,14 @@ export function cleanupYachtModule() {
   lifecycleResumeCleanup = null;
   boardPoseCache.clear();
   boardVisualDiceCache.clear();
+  yachtSfxLooping.forEach((audio) => audio.pause());
+  yachtSfxLooping.clear();
   boardVisualSyncKey = "";
   boardVisualSyncPromise = null;
   boardViewSignature = "";
   boardMountRequestId = 0;
+  yachtActionUnauthorized = false;
+  yachtScoreFeedback = null;
   yachtState = {
     profile: null,
     onProfilePatched: null,
@@ -124,6 +339,7 @@ export function initYachtMenu({ profile, onProfilePatched, onToast }) {
   yachtState.onProfilePatched = onProfilePatched;
   yachtState.onToast = onToast;
   yachtState.roomId = String(profile?.activeYachtRoomId || "").trim();
+  yachtActionUnauthorized = false;
 
   subscribeRoomList();
   if (yachtState.roomId) {
@@ -297,7 +513,6 @@ function renderWaitingRoomView(room) {
             <button type="button" class="ghost-button compact-button" data-yacht-leave>${me ? "\ubc29 \ub098\uac00\uae30" : "\uad00\uc804 \uc885\ub8cc"}</button>
           </div>
         </div>
-
         <article class="content-card yacht-subcard">
           <h3>\ud50c\ub808\uc774\uc5b4</h3>
           <div class="yacht-participant-list">
@@ -305,9 +520,8 @@ function renderWaitingRoomView(room) {
               .map((player, index) => {
                 const isPlayerOwner = String(player.uid || "") === String(room.ownerUid || "");
                 return `
-                  <article class="yacht-participant ${isPlayerOwner ? "is-owner" : ""}">
+                  <article class="yacht-participant ${isPlayerOwner ? "is-owner" : player.isReady ? "is-ready" : ""}">
                     <strong>${index + 1}. ${escapeHtml(player.characterName || "-")}</strong>
-                    <span>${escapeHtml(player.nickname || "-")}</span>
                     <small>${isPlayerOwner ? "\ubc29\uc7a5" : player.isReady ? "\uc900\ube44 \uc644\ub8cc" : "\uc900\ube44 \ub300\uae30"}</small>
                   </article>
                 `;
@@ -330,14 +544,19 @@ function renderPlayingRoomView(room) {
     <div class="yacht-single-shell" data-yacht-playing-view="${escapeHtml(room.id)}">
       <article class="content-card yacht-room-stage yacht-room-stage-play">
         <div class="yacht-stage-head yacht-stage-head-tight">
-          <div>
+          <div class="yacht-stage-title">
             <p class="eyebrow">\uac8c\uc784 \ubc29</p>
             <h3>${escapeHtml(room.title || "\uc694\ud2b8 \ubc29")}</h3>
           </div>
-          <div class="action-row">
-            <div class="yacht-turn-chip">${escapeHtml(currentPlayer?.characterName || "-")} \ucc28\ub840</div>
+          <div class="action-row yacht-room-meta-row">
             <button type="button" class="ghost-button compact-button" data-yacht-leave>${me ? "\ubc29 \ub098\uac00\uae30" : "\uad00\uc804 \uc885\ub8cc"}</button>
           </div>
+          <div class="action-row yacht-tools-row">
+            ${renderYachtRoomTools()}
+          </div>
+        </div>
+        <div class="yacht-emote-overlay" data-yacht-emote-overlay>
+          ${renderYachtEmoteBubbles(room)}
         </div>
 
         <div class="yacht-live-bar">
@@ -352,7 +571,7 @@ function renderPlayingRoomView(room) {
           <section class="content-card yacht-subcard yacht-board-card">
             <div class="yacht-section-head compact yacht-section-head-slim">
               <div>
-                <h3>\uc8fc\uc0ac\uc704</h3>
+                <div class="yacht-turn-chip">${escapeHtml(currentPlayer?.characterName || "-")} \ucc28\ub840</div>
               </div>
             </div>
             <div class="yacht-board-shell">
@@ -382,17 +601,58 @@ function renderSpectatorRoster(room) {
     : "";
 }
 
+function renderYachtEmoteBubbles(room) {
+  const now = Date.now();
+  const occupiedSlots = new Set();
+  return (Array.isArray(room?.emoteEvents) ? room.emoteEvents : [])
+    .filter((event) => {
+      const eventId = getYachtEmoteEventId(event);
+      return eventId && !renderedYachtEmoteEventIds.has(eventId) && now - Number(event.createdAtMs || 0) < 5200;
+    })
+    .slice(-6)
+    .map((event, index) => {
+      const eventId = getYachtEmoteEventId(event);
+      renderedYachtEmoteEventIds.add(eventId);
+      const slot = pickYachtEmoteSlot(event, occupiedSlots, index);
+      const x = 24 + (slot % 3) * 26 + pseudoRandom(hashYachtString(`${event.id || ""}:x`)) * 4;
+      const y = 6 + Math.floor(slot / 3) * 30 + pseudoRandom(hashYachtString(`${event.id || ""}:y`)) * 6;
+      return `
+        <div class="yacht-emote-bubble" data-yacht-emote-event="${escapeHtml(eventId)}" style="--emote-x:${x}%; --emote-y:${y}px;">
+          <span>${renderYachtEmoteIcon(event.emote)}</span>
+          <small>${escapeHtml(event.characterName || "플레이어")}</small>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function getYachtEmoteEventId(event) {
+  return String(event?.id || `${event?.uid || ""}:${event?.createdAtMs || ""}:${event?.emote || ""}`).trim();
+}
+
+function pickYachtEmoteSlot(event, occupiedSlots, fallbackIndex) {
+  const slotCount = 6;
+  const seed = hashYachtString(String(event.id || `${event.uid || ""}:${event.createdAtMs || fallbackIndex}`));
+  for (let offset = 0; offset < slotCount; offset += 1) {
+    const slot = (seed + offset * 2 + fallbackIndex) % slotCount;
+    if (!occupiedSlots.has(slot)) {
+      occupiedSlots.add(slot);
+      return slot;
+    }
+  }
+  return fallbackIndex % slotCount;
+}
+
 function renderPlayingActionRow(room, uid) {
   const isMyTurn =
     String(room.status || "") === ROOM_STATUS_PLAYING &&
     String(room.actionPhase || "") === PHASE_AWAITING_ROLL &&
     String(getCurrentTurnPlayer(room)?.uid || "") === String(uid || "");
-  if (!isMyTurn) return "";
 
   const rollCount = Number(room.rollCount || 0);
   const canRoll = canCurrentUserRoll(room, uid);
   return `
-    <button type="button" class="primary-button" data-yacht-roll ${canRoll ? "" : "disabled"}>\uad74\ub9ac\uae30 ${rollCount}/3</button>
+    ${isMyTurn ? `<button type="button" class="primary-button" data-yacht-roll ${canRoll ? "" : "disabled"}>\uad74\ub9ac\uae30 ${rollCount}/3</button>` : ""}
   `;
 }
 
@@ -406,6 +666,12 @@ function updatePlayingRoomView(room) {
   const turnChip = view.querySelector(".yacht-turn-chip");
   if (turnChip) {
     turnChip.textContent = `${currentPlayer?.characterName || "-"} 차례`;
+  }
+
+  const emoteOverlay = view.querySelector("[data-yacht-emote-overlay]");
+  if (emoteOverlay) {
+    const nextEmotes = renderYachtEmoteBubbles(room);
+    if (nextEmotes) emoteOverlay.insertAdjacentHTML("beforeend", nextEmotes);
   }
 
   const matchLayout = view.querySelector(".yacht-match-layout");
@@ -442,27 +708,8 @@ function updatePlayingRoomView(room) {
 }
 
 function renderFinishedRoomView(room) {
-  const roomPlayer = getRoomPlayer(room, yachtState.profile?.uid);
   return `
     <div class="yacht-single-shell">
-      <article class="content-card yacht-room-stage yacht-room-stage-finished">
-        <div class="yacht-stage-head">
-          <div>
-            <p class="eyebrow">\uacb0\uacfc</p>
-            <h3>${escapeHtml(room.title || "\uc694\ud2b8 \uacb0\uacfc")}</h3>
-            <p class="muted">\uac8c\uc784\uc774 \uc885\ub8cc\ub418\uc5c8\uc2b5\ub2c8\ub2e4. \uc7ac\uc2dc\uc791\uc744 \ub204\ub974\uba74 \ub300\uae30\uc2e4\ub85c \ubcf5\uadc0\ud569\ub2c8\ub2e4.</p>
-          </div>
-          <div class="action-row">
-            <button type="button" class="ghost-button compact-button" data-yacht-leave>\ub098\uac00\uae30</button>
-          </div>
-        </div>
-        <div class="yacht-finished-summary">
-          <p class="muted">\uac00\uc7a5 \uba3c\uc800 \uc7ac\uc2dc\uc791\uc744 \ub204\ub978 \ud50c\ub808\uc774\uc5b4\uac00 \uc0c8 \ub300\uae30\uc2e4\uc758 \ubc29\uc7a5\uc774 \ub429\ub2c8\ub2e4.</p>
-          <div class="action-row">
-            ${roomPlayer ? '<button type="button" class="primary-button" data-yacht-restart>\uc7ac\uc2dc\uc791</button>' : ""}
-          </div>
-        </div>
-      </article>
       ${buildFinalRanking(room)}
     </div>
   `;
@@ -515,9 +762,99 @@ function bindLobbyEvents() {
   });
 }
 
+function bindYachtRoomTools(room) {
+  document.querySelectorAll("[data-yacht-emote-toggle]").forEach((button) => {
+    if (button.dataset.yachtBound) return;
+    button.dataset.yachtBound = "1";
+    button.addEventListener("click", () => {
+      yachtEmotePanelOpen = !yachtEmotePanelOpen;
+      const controls = button.closest(".yacht-emote-controls");
+      const panel = controls?.querySelector(".yacht-emote-panel");
+      controls?.classList.toggle("is-open", yachtEmotePanelOpen);
+      button.setAttribute("aria-expanded", yachtEmotePanelOpen ? "true" : "false");
+      if (panel) panel.hidden = !yachtEmotePanelOpen;
+    });
+  });
+
+  document.querySelectorAll("[data-yacht-sfx-toggle]").forEach((button) => {
+    if (button.dataset.yachtBound) return;
+    button.dataset.yachtBound = "1";
+    button.addEventListener("click", () => {
+      unlockYachtAudio();
+      const next = writeYachtSfxSettings({ enabled: !readYachtSfxSettings().enabled });
+      document.querySelectorAll("[data-yacht-sfx-toggle]").forEach((toggle) => {
+        toggle.innerHTML = renderYachtSfxIcon(next.enabled);
+        toggle.setAttribute("aria-label", next.enabled ? "효과음 끄기" : "효과음 켜기");
+        toggle.setAttribute("title", next.enabled ? "효과음 켜짐" : "효과음 꺼짐");
+      });
+      if (!next.enabled) {
+        yachtSfxLooping.forEach((audio) => audio.pause());
+        yachtSfxLooping.clear();
+      } else {
+        playYachtSfx("roll", { volume: 0.18 });
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-yacht-sfx-volume]").forEach((input) => {
+    if (input.dataset.yachtBound) return;
+    input.dataset.yachtBound = "1";
+    input.addEventListener("input", () => {
+      const settings = writeYachtSfxSettings({ volume: Number(input.value || 0) / 100 });
+      document.querySelectorAll("[data-yacht-sfx-volume]").forEach((volumeInput) => {
+        if (volumeInput !== input) volumeInput.value = String(Math.round(settings.volume * 100));
+      });
+      yachtSfxAudio.forEach((audio, key) => applyYachtSfxVolume(audio, key));
+      if (settings.enabled) unlockYachtAudio();
+    });
+  });
+
+  document.querySelectorAll("[data-yacht-emote]").forEach((button) => {
+    if (button.dataset.yachtBound) return;
+    button.dataset.yachtBound = "1";
+    button.addEventListener("click", async () => {
+      if (Date.now() < yachtEmoteCooldownUntilMs) return;
+      try {
+        unlockYachtAudio();
+        yachtEmoteCooldownUntilMs = Date.now() + 5200;
+        yachtEmotePanelOpen = false;
+        setYachtEmoteButtonsDisabled(true);
+        refreshYachtRoomTools(room);
+        window.setTimeout(() => {
+          if (Date.now() >= yachtEmoteCooldownUntilMs) {
+            setYachtEmoteButtonsDisabled(false);
+            refreshYachtRoomTools(room);
+          }
+        }, 5250);
+        await sendYachtEmote(room.id, button.dataset.yachtEmote);
+      } catch (error) {
+        yachtEmoteCooldownUntilMs = 0;
+        setYachtEmoteButtonsDisabled(false);
+        yachtState.onToast?.(error.message, true);
+      }
+    });
+  });
+}
+
+function refreshYachtRoomTools(room) {
+  document.querySelectorAll(".yacht-room-tools").forEach((element) => {
+    element.outerHTML = renderYachtRoomTools();
+  });
+  bindYachtRoomTools(room);
+}
+
+function setYachtEmoteButtonsDisabled(disabled) {
+  document.querySelectorAll("[data-yacht-emote]").forEach((button) => {
+    button.disabled = Boolean(disabled);
+  });
+}
+
 function bindWaitingRoomEvents(room) {
+  bindYachtRoomTools(room);
+
   document.querySelector("[data-yacht-ready]")?.addEventListener("click", async () => {
     try {
+      unlockYachtAudio();
       await withPendingToast(() => toggleReady(room.id));
       yachtState.onToast?.("\uc900\ube44 \uc0c1\ud0dc\ub97c \ubcc0\uacbd\ud588\uc2b5\ub2c8\ub2e4.");
     } catch (error) {
@@ -527,7 +864,15 @@ function bindWaitingRoomEvents(room) {
 
   document.querySelector("[data-yacht-start]")?.addEventListener("click", async () => {
     try {
-      await withPendingToast(() => startGame(room.id));
+      unlockYachtAudio();
+      const result = await withPendingToast(() => startGame(room.id));
+      if (result?.room) {
+        yachtState.room = { id: room.id, ...result.room };
+        boardViewSignature = "";
+        renderYachtRoot();
+        if (typeof activeRoomUnsubscribe === "function") activeRoomUnsubscribe();
+        subscribeActiveRoom(room.id);
+      }
       yachtState.onToast?.("\uac8c\uc784\uc744 \uc2dc\uc791\ud588\uc2b5\ub2c8\ub2e4.");
     } catch (error) {
       yachtState.onToast?.(error.message, true);
@@ -550,19 +895,74 @@ function bindWaitingRoomEvents(room) {
 }
 
 function bindPlayingRoomEvents(room) {
-  document.querySelector("[data-yacht-roll]")?.addEventListener("click", async () => {
+  bindYachtRoomTools(room);
+
+  const rollButton = document.querySelector("[data-yacht-roll]");
+  if (rollButton && !rollButton.dataset.yachtBound) {
+    rollButton.dataset.yachtBound = "1";
+    rollButton.addEventListener("pointerenter", () => startYachtSfxLoop("shake"));
+    rollButton.addEventListener("pointerleave", () => stopYachtSfxLoop("shake"));
+    rollButton.addEventListener("pointerup", () => stopYachtSfxLoop("shake"));
+    rollButton.addEventListener("pointercancel", () => stopYachtSfxLoop("shake"));
+    rollButton.addEventListener("contextmenu", (event) => event.preventDefault());
+    rollButton.addEventListener("pointerdown", () => {
+      unlockYachtAudio();
+      startYachtSfxLoop("shake");
+    });
+    rollButton.addEventListener("click", async () => {
     try {
+      unlockYachtAudio();
+      stopYachtSfxLoop("shake");
+      playYachtSfx("roll");
       await withPendingToast(() => requestRoll(room.id));
       yachtState.onToast?.("\uc8fc\uc0ac\uc704\ub97c \uad74\ub838\uc2b5\ub2c8\ub2e4.");
     } catch (error) {
       yachtState.onToast?.(error.message, true);
     }
   });
+  }
+
+  const sfxToggle = document.querySelector("[data-yacht-sfx-toggle]");
+  if (sfxToggle && !sfxToggle.dataset.yachtBound) {
+    sfxToggle.dataset.yachtBound = "1";
+    sfxToggle.addEventListener("click", () => {
+      unlockYachtAudio();
+      const next = writeYachtSfxSettings({ enabled: !readYachtSfxSettings().enabled });
+      sfxToggle.textContent = `효과음 ${next.enabled ? "ON" : "OFF"}`;
+      if (!next.enabled) {
+        yachtSfxLooping.forEach((audio) => audio.pause());
+        yachtSfxLooping.clear();
+      }
+    });
+  }
+
+  const sfxVolume = document.querySelector("[data-yacht-sfx-volume]");
+  if (sfxVolume && !sfxVolume.dataset.yachtBound) {
+    sfxVolume.dataset.yachtBound = "1";
+    sfxVolume.addEventListener("input", () => {
+      const settings = writeYachtSfxSettings({ volume: Number(sfxVolume.value || 0) / 100 });
+      yachtSfxAudio.forEach((audio, key) => applyYachtSfxVolume(audio, key));
+      if (settings.enabled) unlockYachtAudio();
+    });
+  }
 
   document.querySelectorAll("[data-yacht-score-category]").forEach((button) => {
+    if (button.dataset.yachtBound) return;
+    button.dataset.yachtBound = "1";
     button.addEventListener("click", async () => {
       try {
-        await withPendingToast(() => lockScore(room.id, button.dataset.yachtScoreCategory));
+        const categoryId = button.dataset.yachtScoreCategory;
+        const score = Number(button.querySelector("span")?.textContent || 0);
+        yachtScoreFeedback = {
+          roomId: room.id,
+          playerUid: yachtState.profile?.uid,
+          categoryId,
+          score,
+          at: Date.now(),
+        };
+        showYachtScoreFeedback(categoryId, score);
+        updatePlayingRoomView(yachtState.room || room);
+        await withPendingToast(() => lockScore(room.id, categoryId));
         yachtState.onToast?.("\uc810\uc218\ub97c \ub4f1\ub85d\ud588\uc2b5\ub2c8\ub2e4.");
       } catch (error) {
         yachtState.onToast?.(error.message, true);
@@ -571,6 +971,8 @@ function bindPlayingRoomEvents(room) {
   });
 
   document.querySelectorAll("[data-yacht-held-slot]").forEach((button) => {
+    if (button.dataset.yachtBound) return;
+    button.dataset.yachtBound = "1";
     button.addEventListener("click", async () => {
       const index = Number(button.dataset.yachtHeldSlot);
       if (!Number.isInteger(index)) return;
@@ -582,7 +984,10 @@ function bindPlayingRoomEvents(room) {
     });
   });
 
-  document.querySelector("[data-yacht-leave]")?.addEventListener("click", async () => {
+  const leaveButton = document.querySelector("[data-yacht-leave]");
+  if (leaveButton && !leaveButton.dataset.yachtBound) {
+    leaveButton.dataset.yachtBound = "1";
+    leaveButton.addEventListener("click", async () => {
     try {
       yachtState.onToast?.forceHide?.();
       await withPendingToast(async () => {
@@ -595,6 +1000,7 @@ function bindPlayingRoomEvents(room) {
       yachtState.onToast?.(error.message, true);
     }
   });
+  }
 
 }
 
@@ -693,8 +1099,12 @@ function bindLifecycleResumeHandlers() {
     boardViewSignature = "";
     if (yachtState.room?.id) {
       const roomKey = String(yachtState.room.id || "");
-      boardPoseCache.delete(roomKey);
-      boardVisualDiceCache.delete(roomKey);
+      const liveRoom = yachtState.room;
+      const diceSeed = Number(liveRoom.diceSeed || 0);
+      const cachedVisual = boardVisualDiceCache.get(roomKey);
+      const cachedPose = boardPoseCache.get(roomKey);
+      if (cachedVisual?.diceSeed !== diceSeed) boardVisualDiceCache.delete(roomKey);
+      if (cachedPose?.diceSeed !== diceSeed) boardPoseCache.delete(roomKey);
     }
     updateVisibleTimers();
     scheduleAutomationWake();
@@ -840,7 +1250,7 @@ function pickBestScoreCategory(scoreSheet, dice) {
 function canHostStartGame(room, uid) {
   if (String(room.ownerUid || "") !== String(uid || "")) return false;
   const players = Array.isArray(room.players) ? room.players : [];
-  if (players.length < 2) return false;
+  if (players.length < 1) return false;
   return players
     .filter((player) => String(player.uid || "") !== String(room.ownerUid || ""))
     .every((player) => Boolean(player.isReady));
@@ -852,8 +1262,8 @@ function resolveStartError(room, uid) {
   }
 
   const players = Array.isArray(room.players) ? room.players : [];
-  if (players.length < 2) {
-    return "최소 2명 이상 입장해야 게임을 시작할 수 있습니다.";
+  if (players.length < 1) {
+    return "플레이어가 있어야 게임을 시작할 수 있습니다.";
   }
 
   const waitingPlayers = players.filter(
@@ -962,13 +1372,17 @@ function resolveCategoryLabel(categoryId) {
   return SCORE_ROWS.find((row) => row.id === categoryId)?.label || categoryId;
 }
 
-function resolveScoreCellText(player, rowId, dice = [], viewerUid = "") {
-  if (rowId === "upperSubtotal") return String(Number(player.upperSubtotal || 0));
-  if (rowId === "bonus") return Number(player.bonus || 0) > 0 ? "35" : "-";
+function resolveScoreCellText(player, rowId, dice = [], viewerUid = "", canPreviewScore = false) {
+  if (rowId === "upperSubtotal") return `${Number(player.upperSubtotal || 0)}/63`;
+  if (rowId === "bonus") return Number(player.upperSubtotal || 0) >= 63 ? "35" : "-";
   if (rowId === "finalScore") return String(Number(player.finalScore || 0));
 
   if (!player.scoreSheet?.[rowId]?.locked) {
-    if (String(player.uid || "") === String(viewerUid || "") && PLAYABLE_CATEGORY_IDS.includes(rowId)) {
+    if (
+      canPreviewScore &&
+      String(player.uid || "") === String(viewerUid || "") &&
+      PLAYABLE_CATEGORY_IDS.includes(rowId)
+    ) {
       return String(calculateCategoryScore(rowId, normalizeDice(dice)));
     }
     return "-";
@@ -977,6 +1391,16 @@ function resolveScoreCellText(player, rowId, dice = [], viewerUid = "") {
 }
 
 function getDisplayedDiceValues(room) {
+  const roomKey = String(room?.id || "");
+  const diceSeed = Number(room?.diceSeed || 0);
+  const localVisualState = boardVisualDiceCache.get(roomKey);
+  if (localVisualState?.diceSeed === diceSeed && Array.isArray(localVisualState.values)) {
+    return normalizeDice(localVisualState.values);
+  }
+  const sharedVisualState = getSharedVisualDiceState(room);
+  if (Array.isArray(sharedVisualState?.values)) {
+    return normalizeDice(sharedVisualState.values);
+  }
   return normalizeDice(room?.dice);
 }
 
@@ -984,6 +1408,13 @@ function getSharedVisualDiceState(room) {
   if (!room?.visualDiceState || typeof room.visualDiceState !== "object") return null;
   if (Number(room.visualDiceState.diceSeed || 0) !== Number(room.diceSeed || 0)) return null;
   return room.visualDiceState;
+}
+
+function getSharedDiceMotion(room) {
+  if (!room?.diceMotion || typeof room.diceMotion !== "object") return null;
+  if (Number(room.diceMotion.diceSeed || 0) !== Number(room.diceSeed || 0)) return null;
+  if (!Array.isArray(room.diceMotion.dice)) return null;
+  return room.diceMotion;
 }
 
 function buildLocalVisualDiceStatePayload(room) {
@@ -994,7 +1425,11 @@ function buildLocalVisualDiceStatePayload(room) {
   const diceSeed = Number(liveRoom.diceSeed || 0);
   const localVisualState = boardVisualDiceCache.get(roomKey);
   const sharedVisualState = getSharedVisualDiceState(liveRoom);
-  const values = normalizeDice(liveRoom.dice);
+  const values = normalizeDice(
+    localVisualState?.diceSeed === diceSeed && Array.isArray(localVisualState.values)
+      ? localVisualState.values
+      : sharedVisualState?.values || liveRoom.dice
+  );
   const poses = {
     ...((sharedVisualState?.poses && typeof sharedVisualState.poses === "object") ? sharedVisualState.poses : {}),
     ...((localVisualState?.poses && typeof localVisualState.poses === "object") ? localVisualState.poses : {}),
@@ -1039,14 +1474,13 @@ function buildSlotDieFace(value = 0, empty = false) {
   `;
 }
 
-function renderDieCubeFaces(value) {
-  const safe = Math.max(1, Math.min(6, Number(value || 1)));
-  const front = safe;
-  const back = 7 - front;
-  const top = safe === 6 ? 2 : safe + 1;
-  const bottom = 7 - top;
-  const right = safe >= 4 ? safe - 2 : safe + 2;
-  const left = 7 - right;
+function renderDieCubeFaces() {
+  const front = 2;
+  const back = 5;
+  const top = 1;
+  const bottom = 6;
+  const right = 3;
+  const left = 4;
   return {
     front,
     back,
@@ -1098,6 +1532,32 @@ function buildCircularBoard(room) {
       <div class="yacht-board-canvas-shell"></div>
     </div>
   `;
+}
+
+function showYachtCelebration(boardEl, roomId, diceSeed) {
+  if (!boardEl) return;
+  const key = `${roomId}:${diceSeed}`;
+  if (yachtCelebrationKeys.has(key)) return;
+  yachtCelebrationKeys.add(key);
+
+  const existing = boardEl.querySelector(".yacht-celebration");
+  if (existing) existing.remove();
+
+  const burst = document.createElement("div");
+  burst.className = "yacht-celebration";
+  burst.setAttribute("aria-hidden", "true");
+  burst.innerHTML = `
+    <span class="yacht-celebration-text">YACHT!</span>
+    <span class="yacht-celebration-burst b1"></span>
+    <span class="yacht-celebration-burst b2"></span>
+    <span class="yacht-celebration-burst b3"></span>
+    <span class="yacht-celebration-burst b4"></span>
+    <span class="yacht-celebration-burst b5"></span>
+    <span class="yacht-celebration-burst b6"></span>
+  `;
+  boardEl.appendChild(burst);
+  playYachtSfx("yacht");
+  window.setTimeout(() => burst.remove(), 1700);
 }
 
 function buildHeldDiceRack(room, canToggleHold) {
@@ -1191,7 +1651,7 @@ function buildScoreMatrix(room) {
           </tr>
         </thead>
         <tbody>
-          ${SCORE_ROWS.map((row) => {
+          ${SCORE_TABLE_ROWS.map((row) => {
             return `
               <tr class="${row.summary ? "is-summary-row" : ""}">
                 <th class="yacht-score-row-head">${escapeHtml(row.label)}</th>
@@ -1205,10 +1665,17 @@ function buildScoreMatrix(room) {
                       PLAYABLE_CATEGORY_IDS.includes(row.id) &&
                       !player.scoreSheet?.[row.id]?.locked;
 
+                    const isFeedbackCell =
+                      yachtScoreFeedback &&
+                      String(yachtScoreFeedback.roomId || "") === String(room.id || "") &&
+                      String(yachtScoreFeedback.playerUid || "") === String(player.uid || "") &&
+                      String(yachtScoreFeedback.categoryId || "") === String(row.id || "") &&
+                      Date.now() - Number(yachtScoreFeedback.at || 0) < 2200;
+
                     if (isCurrentUserTurn) {
                       const score = calculateCategoryScore(row.id, currentDice);
                       return `
-                        <td class="yacht-score-cell ${isCurrentTurnPlayer ? "is-current-turn" : ""}">
+                        <td class="yacht-score-cell ${isCurrentTurnPlayer ? "is-current-turn" : ""} ${isFeedbackCell ? "is-scored-flash" : ""}">
                           <button
                             type="button"
                             class="yacht-score-cell-button"
@@ -1221,8 +1688,8 @@ function buildScoreMatrix(room) {
                       `;
                     }
 
-                    return `<td class="yacht-score-cell ${isCurrentTurnPlayer ? "is-current-turn" : ""}"><span class="yacht-score-cell-preview ${row.summary ? "is-summary" : ""}">${escapeHtml(
-                      resolveScoreCellText(player, row.id, currentDice, viewerUid)
+                    return `<td class="yacht-score-cell ${isCurrentTurnPlayer ? "is-current-turn" : ""} ${isFeedbackCell ? "is-scored-flash" : ""}"><span class="yacht-score-cell-preview ${row.summary ? "is-summary" : ""}">${escapeHtml(
+                      resolveScoreCellText(player, row.id, currentDice, viewerUid, canScore)
                     )}</span></td>`;
                   })
                   .join("")}
@@ -1235,6 +1702,18 @@ function buildScoreMatrix(room) {
   `;
 }
 
+function showYachtScoreFeedback(categoryId, score) {
+  const root = document.querySelector("[data-yacht-playing-view]");
+  if (!root) return;
+  root.querySelector(".yacht-score-toast")?.remove();
+  const label = resolveCategoryLabel(categoryId);
+  const toast = document.createElement("div");
+  toast.className = "yacht-score-toast";
+  toast.textContent = `${label} ${score}점 등록`;
+  root.appendChild(toast);
+  window.setTimeout(() => toast.remove(), 1700);
+}
+
 async function mountPhysicsBoard(room) {
   const boardEl = document.querySelector("[data-yacht-physics-board]");
   if (!boardEl) return;
@@ -1245,6 +1724,7 @@ async function mountPhysicsBoard(room) {
     diceSeed: Number(room.diceSeed || 0),
     dice: normalizeDice(room.dice),
     heldDice: Array.isArray(room.heldDice) ? room.heldDice.slice(0, YACHT_DICE_COUNT).map(Boolean) : [],
+    diceMotion: room.diceMotion || null,
     visualDiceState: room.visualDiceState || null,
   });
   if (boardViewSignature === nextSignature && typeof boardViewCleanup === "function") {
@@ -1300,7 +1780,11 @@ async function syncVisualDiceIfNeeded(room) {
   const diceSeed = Number(liveRoom.diceSeed || 0);
   const localVisualState = boardVisualDiceCache.get(roomKey);
   const sharedVisualState = getSharedVisualDiceState(liveRoom);
-  const actual = normalizeDice(liveRoom.dice);
+  const actual = normalizeDice(
+    localVisualState?.diceSeed === diceSeed
+      ? localVisualState.values
+      : sharedVisualState?.values || liveRoom.dice
+  );
   const mergedPoses = {
     ...((sharedVisualState?.poses && typeof sharedVisualState.poses === "object") ? sharedVisualState.poses : {}),
     ...((localVisualState?.poses && typeof localVisualState.poses === "object") ? localVisualState.poses : {}),
@@ -1473,23 +1957,37 @@ function createBoardEngine(THREE, CANNON, RoundedBox) {
     return texture.clone();
   }
 
-  function buildMaterials(value) {
-    const faces = renderDieCubeFaces(value);
+  function buildMaterials() {
+    const faces = renderDieCubeFaces();
     return [
       new THREE.MeshStandardMaterial({ map: createFaceTexture(faces.right), roughness: 0.42, metalness: 0.05 }),
       new THREE.MeshStandardMaterial({ map: createFaceTexture(faces.left), roughness: 0.42, metalness: 0.05 }),
-      new THREE.MeshStandardMaterial({ map: createFaceTexture(value), roughness: 0.42, metalness: 0.05 }),
+      new THREE.MeshStandardMaterial({ map: createFaceTexture(faces.top), roughness: 0.42, metalness: 0.05 }),
       new THREE.MeshStandardMaterial({ map: createFaceTexture(faces.bottom), roughness: 0.42, metalness: 0.05 }),
       new THREE.MeshStandardMaterial({ map: createFaceTexture(faces.front), roughness: 0.42, metalness: 0.05 }),
       new THREE.MeshStandardMaterial({ map: createFaceTexture(faces.back), roughness: 0.42, metalness: 0.05 }),
     ];
   }
 
-  function getFinalQuaternion(value, seed = 0) {
-    const quarterTurn = Math.floor(pseudoRandom(seed + Number(value || 1) * 17) * 4) * (Math.PI / 2);
-    const quaternion = new THREE.Quaternion();
-    quaternion.setFromEuler(new THREE.Euler(0, quarterTurn, 0));
-    return quaternion;
+  function getFinalQuaternion(value, seed = 0, yawOverride = null) {
+    const safeValue = Math.max(1, Math.min(6, Number(value || 1)));
+    const faceNormals = {
+      1: new THREE.Vector3(0, 1, 0),
+      2: new THREE.Vector3(0, 0, 1),
+      3: new THREE.Vector3(1, 0, 0),
+      4: new THREE.Vector3(-1, 0, 0),
+      5: new THREE.Vector3(0, 0, -1),
+      6: new THREE.Vector3(0, -1, 0),
+    };
+    const quarterTurn = Number.isFinite(Number(yawOverride))
+      ? Number(yawOverride)
+      : Math.floor(pseudoRandom(seed + safeValue * 17) * 4) * (Math.PI / 2);
+    const alignTop = new THREE.Quaternion().setFromUnitVectors(
+      faceNormals[safeValue] || faceNormals[1],
+      new THREE.Vector3(0, 1, 0)
+    );
+    const yaw = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, quarterTurn, 0));
+    return yaw.multiply(alignTop);
   }
 
   function getRollingQuaternion(seed = 0) {
@@ -1504,30 +2002,22 @@ function createBoardEngine(THREE, CANNON, RoundedBox) {
     return quaternion;
   }
 
-  function readTopFaceValue(baseValue, quaternion, objectPosition, cameraPosition) {
-    const faces = renderDieCubeFaces(baseValue);
+  function readTopFaceValue(quaternion) {
+    const faces = renderDieCubeFaces();
     const candidates = [
-      { normal: new THREE.Vector3(1, 0, 0), center: new THREE.Vector3(0.27, 0, 0), value: faces.right },
-      { normal: new THREE.Vector3(-1, 0, 0), center: new THREE.Vector3(-0.27, 0, 0), value: faces.left },
-      {
-        normal: new THREE.Vector3(0, 1, 0),
-        center: new THREE.Vector3(0, 0.27, 0),
-        value: Math.max(1, Math.min(6, Number(baseValue || 1))),
-      },
-      { normal: new THREE.Vector3(0, -1, 0), center: new THREE.Vector3(0, -0.27, 0), value: faces.bottom },
-      { normal: new THREE.Vector3(0, 0, 1), center: new THREE.Vector3(0, 0, 0.27), value: faces.front },
-      { normal: new THREE.Vector3(0, 0, -1), center: new THREE.Vector3(0, 0, -0.27), value: faces.back },
+      { normal: new THREE.Vector3(1, 0, 0), value: faces.right },
+      { normal: new THREE.Vector3(-1, 0, 0), value: faces.left },
+      { normal: new THREE.Vector3(0, 1, 0), value: faces.top },
+      { normal: new THREE.Vector3(0, -1, 0), value: faces.bottom },
+      { normal: new THREE.Vector3(0, 0, 1), value: faces.front },
+      { normal: new THREE.Vector3(0, 0, -1), value: faces.back },
     ];
     const up = new THREE.Vector3(0, 1, 0);
     let best = candidates[0];
     let bestDot = -Infinity;
     candidates.forEach((candidate) => {
       const worldNormal = candidate.normal.clone().applyQuaternion(quaternion);
-      const worldCenter = candidate.center.clone().applyQuaternion(quaternion).add(objectPosition);
-      const cameraRay = cameraPosition.clone().sub(worldCenter).normalize();
-      const facingScore = worldNormal.dot(cameraRay);
-      const topBias = worldNormal.dot(up);
-      const score = facingScore * 0.78 + topBias * 0.22;
+      const score = worldNormal.dot(up);
       if (score > bestDot) {
         bestDot = score;
         best = candidate;
@@ -1654,6 +2144,12 @@ function mount(container, room) {
     const poseCacheKey = String(room.id || "");
     const isRolling = String(room.actionPhase || "") === PHASE_ROLLING;
     const sharedVisualState = getSharedVisualDiceState(room);
+    const sharedDiceMotion = getSharedDiceMotion(room);
+    const motionByIndex = new Map(
+      (sharedDiceMotion?.dice || []).map((entry) => [Number(entry.index), entry])
+    );
+    const motionDurationMs = Math.max(1200, Number(sharedDiceMotion?.durationMs || YACHT_ROLL_ANIMATION_MS));
+    const motionStartedAtMs = Number(sharedDiceMotion?.startedAtMs || 0);
     const cachedPoseState = boardPoseCache.get(poseCacheKey) || {};
     const cacheAgeMs = Math.max(0, Date.now() - Number(cachedPoseState.updatedAtMs || 0));
     const localCachedPoses =
@@ -1682,7 +2178,7 @@ function mount(container, room) {
       .filter((entry) => !heldDice[entry.index])
       .map(({ value, index }) => {
       const geometry = new RoundedBox.RoundedBoxGeometry(0.54, 0.54, 0.54, 4, 0.07);
-      const mesh = new THREE.Mesh(geometry, buildMaterials(value));
+      const mesh = new THREE.Mesh(geometry, buildMaterials());
       mesh.userData.dieIndex = index;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -1721,11 +2217,20 @@ function mount(container, room) {
       } else {
         occupiedPlanarEntries.push({ index, x: px, z: pz, held: false });
       }
-      const rollQ = getFinalQuaternion(value, seedBase + index * 41);
+      const motionEntry = motionByIndex.get(index);
+      if (motionEntry?.final) {
+        px = Number(motionEntry.final.x ?? px);
+        pz = Number(motionEntry.final.z ?? pz);
+        const finalOccupiedEntry = occupiedPlanarEntries.find((entry) => entry.index === index);
+        if (finalOccupiedEntry) {
+          finalOccupiedEntry.x = px;
+          finalOccupiedEntry.z = pz;
+        }
+      }
+      const rollQ = getFinalQuaternion(value, seedBase + index * 41, motionEntry?.final?.yaw);
 
       if (isRolling && !heldDice[index]) {
-        const rollingQ = getRollingQuaternion(seedBase + index * 53);
-        rollingQ.slerp(rollQ, 0.22);
+        const rollingQ = getRollingQuaternion(Number(motionEntry?.rollingQuaternionSeed || seedBase + index * 53));
         const throwSide = index % 4;
         const sideDrift = (pseudoRandom(seedBase + index * 11) - 0.5) * 0.3;
         let startX = px;
@@ -1733,7 +2238,12 @@ function mount(container, room) {
         let velocityX = 0;
         let velocityZ = 0;
 
-        if (throwSide === 0) {
+        if (motionEntry?.start && motionEntry?.velocity) {
+          startX = Number(motionEntry.start.x ?? startX);
+          startZ = Number(motionEntry.start.z ?? startZ);
+          velocityX = Number(motionEntry.velocity.x ?? 0);
+          velocityZ = Number(motionEntry.velocity.z ?? 0);
+        } else if (throwSide === 0) {
           startX = -playRadius + 0.2;
           startZ = pz + sideDrift;
           velocityX = 7.2 + pseudoRandom(seedBase + index * 13) * 1.0;
@@ -1755,34 +2265,52 @@ function mount(container, room) {
           velocityZ = -7.2 - pseudoRandom(seedBase + index * 19) * 1.0;
         }
 
-        const startPlanar = resolveNonOverlappingPlanarPosition(
-          startX,
-          startZ,
-          occupiedByOthers.filter((entry) => entry.held),
-          playRadius - 0.08,
-          0.72
-        );
-        startX = startPlanar.x;
-        startZ = startPlanar.z;
+        if (!motionEntry?.start) {
+          const startPlanar = resolveNonOverlappingPlanarPosition(
+            startX,
+            startZ,
+            occupiedByOthers.filter((entry) => entry.held),
+            playRadius - 0.08,
+            0.72
+          );
+          startX = startPlanar.x;
+          startZ = startPlanar.z;
+        }
 
-        body.position.set(startX, 0.76 + pseudoRandom(seedBase + index * 37) * 0.12, startZ);
+        body.position.set(
+          startX,
+          Number(motionEntry?.start?.y ?? 0.76 + pseudoRandom(seedBase + index * 37) * 0.12),
+          startZ
+        );
         body.quaternion.set(rollingQ.x, rollingQ.y, rollingQ.z, rollingQ.w);
         body.velocity.set(
           velocityX,
-          -0.14 - pseudoRandom(seedBase + index * 17) * 0.12,
+          Number(motionEntry?.velocity?.y ?? -0.14 - pseudoRandom(seedBase + index * 17) * 0.12),
           velocityZ
         );
         body.angularVelocity.set(
-          4.5 + pseudoRandom(seedBase + index * 23) * 2.0,
-          3.8 + pseudoRandom(seedBase + index * 29) * 1.5,
-          4.5 + pseudoRandom(seedBase + index * 31) * 2.0
+          Number(motionEntry?.angularVelocity?.x ?? 4.5 + pseudoRandom(seedBase + index * 23) * 2.0),
+          Number(motionEntry?.angularVelocity?.y ?? 3.8 + pseudoRandom(seedBase + index * 29) * 1.5),
+          Number(motionEntry?.angularVelocity?.z ?? 4.5 + pseudoRandom(seedBase + index * 31) * 2.0)
         );
       } else if (cachedPoses[index]) {
         const pose = cachedPoses[index];
-        body.position.set(
+        const posePlanar = resolveNonOverlappingPlanarPosition(
           Number(pose.position?.x || px),
+          Number(pose.position?.z || pz),
+          occupiedPlanarEntries.filter((entry) => entry.index !== index),
+          dieCenterLimit,
+          0.82
+        );
+        const poseOccupiedEntry = occupiedPlanarEntries.find((entry) => entry.index === index);
+        if (poseOccupiedEntry) {
+          poseOccupiedEntry.x = posePlanar.x;
+          poseOccupiedEntry.z = posePlanar.z;
+        }
+        body.position.set(
+          posePlanar.x,
           Number(pose.position?.y || 0.42),
-          Number(pose.position?.z || pz)
+          posePlanar.z
         );
         body.quaternion.set(
           Number(pose.quaternion?.x || rollQ.x),
@@ -1811,21 +2339,24 @@ function mount(container, room) {
         body,
         hitArea,
         dieIndex: index,
-        targetQuaternion: rollQ,
         restPosition: { x: px, z: pz },
-        settlePlan: null,
-        settlePhase: pseudoRandom(seedBase + index * 61) * Math.PI * 2,
+        settlePhase: Number(motionEntry?.settlePhase ?? pseudoRandom(seedBase + index * 61) * Math.PI * 2),
       };
     });
 
     let rafId = 0;
     let stopped = false;
     let lastTime = performance.now();
-    const rollStartedAtMs = performance.now();
-    const settleStartMs = isRolling ? rollStartedAtMs + 560 : 0;
-    const settleEndMs = isRolling ? rollStartedAtMs + YACHT_ROLL_ANIMATION_MS - 180 : 0;
+    const elapsedAtMountMs = isRolling && motionStartedAtMs
+      ? Math.max(0, Date.now() - motionStartedAtMs)
+      : 0;
+    const rollStartedAtMs = performance.now() - elapsedAtMountMs;
+    const rollEndMs = isRolling ? rollStartedAtMs + motionDurationMs : 0;
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
+    let stableRollSignature = "";
+    let stableRollSinceMs = 0;
+    let rollFinalizePromise = null;
 
     function resize() {
       const nextWidth = Math.max(320, shell.clientWidth || container.clientWidth || 520);
@@ -1883,11 +2414,11 @@ function mount(container, room) {
 
       const rollingNow = isCurrentlyRolling();
 
-      if (rollingNow && now < settleStartMs) {
+      if (rollingNow && now < rollEndMs) {
         world.step(1 / 60, dt, 5);
       }
 
-      if (rollingNow && now < settleStartMs) {
+      if (rollingNow && now < rollEndMs) {
         for (let leftIndex = 0; leftIndex < diceSet.length; leftIndex += 1) {
           for (let rightIndex = leftIndex + 1; rightIndex < diceSet.length; rightIndex += 1) {
             const leftDie = diceSet[leftIndex];
@@ -1918,99 +2449,40 @@ function mount(container, room) {
           die.body.velocity.z -= outwardVelocity * nz * 2.1;
           die.body.angularVelocity.scale(0.92, die.body.angularVelocity);
         });
-      }
 
-      if (rollingNow && now >= settleStartMs) {
-        const progress = Math.min(1, (now - settleStartMs) / Math.max(1, settleEndMs - settleStartMs));
+        const settleDampingStartMs = rollEndMs - 950;
+        const dampingProgress = clamp01((now - settleDampingStartMs) / 950);
         diceSet.forEach((die) => {
-          if (!die.settlePlan) {
-            const initialVelocityX = Number(die.body.velocity.x || 0);
-            const initialVelocityZ = Number(die.body.velocity.z || 0);
-            const initialSpeed = Math.hypot(initialVelocityX, initialVelocityZ);
-            const fallbackAngle = die.settlePhase;
-            die.settlePlan = {
-              startPosition: new THREE.Vector3(
-                die.body.position.x,
-                die.body.position.y,
-                die.body.position.z
-              ),
-              targetPosition: new THREE.Vector3(
-                die.body.position.x,
-                0.42,
-                die.body.position.z
-              ),
-              startQuaternion: new THREE.Quaternion(
-                die.body.quaternion.x,
-                die.body.quaternion.y,
-                die.body.quaternion.z,
-                die.body.quaternion.w
-              ),
-              wobbleTilt: 0.14 + pseudoRandom(seedBase + die.dieIndex * 67) * 0.08,
-              wobbleLift: 0.05 + pseudoRandom(seedBase + die.dieIndex * 71) * 0.04,
-              driftRadius: 0.05 + pseudoRandom(seedBase + die.dieIndex * 73) * 0.04,
-              approachDirX: initialSpeed > 0.01 ? initialVelocityX / initialSpeed : Math.cos(fallbackAngle),
-              approachDirZ: initialSpeed > 0.01 ? initialVelocityZ / initialSpeed : Math.sin(fallbackAngle),
-              approachDistance: Math.min(0.24, 0.08 + initialSpeed * 0.03),
-            };
+          if (die.body.position.y > 1.55) {
+            die.body.position.y = 1.55;
+            if (die.body.velocity.y > 0) die.body.velocity.y = 0;
           }
-
-          const positionT = easeInOutSine(progress);
-          const prepT = clamp01((progress - 0.28) / 0.72);
-          const orientationT = easeOutCubic(prepT);
-          const liftFade = 1 - positionT;
-          const wobbleFade = Math.pow(1 - orientationT, 1.2);
-          const driftWave = progress * Math.PI * 2.6 + die.settlePhase;
-          const forwardCarry = (1 - orientationT) * (0.42 + (1 - positionT) * 0.58);
-
-          die.body.velocity.set(0, 0, 0);
-          die.body.angularVelocity.set(0, 0, 0);
-
-          const baseX = lerp(die.settlePlan.startPosition.x, die.settlePlan.targetPosition.x, positionT);
-          const baseZ = lerp(die.settlePlan.startPosition.z, die.settlePlan.targetPosition.z, positionT);
-          const driftRadius = die.settlePlan.driftRadius * liftFade;
-          die.body.position.x =
-            baseX +
-            die.settlePlan.approachDirX * die.settlePlan.approachDistance * forwardCarry +
-            Math.cos(driftWave) * driftRadius;
-          die.body.position.z =
-            baseZ +
-            die.settlePlan.approachDirZ * die.settlePlan.approachDistance * forwardCarry +
-            Math.sin(driftWave) * driftRadius * 0.82;
-          die.body.position.y =
-            lerp(die.settlePlan.startPosition.y, die.settlePlan.targetPosition.y, easeOutCubic(progress)) +
-            Math.sin(progress * Math.PI) * die.settlePlan.wobbleLift * liftFade;
-
-          const currentQ = die.settlePlan.startQuaternion.clone();
-          currentQ.slerp(die.targetQuaternion, orientationT);
-          const wobbleEuler = new THREE.Euler(
-            Math.sin(driftWave * 1.2) * die.settlePlan.wobbleTilt * wobbleFade,
-            Math.cos(driftWave * 0.9) * die.settlePlan.wobbleTilt * 0.38 * wobbleFade,
-            Math.cos(driftWave * 1.15) * die.settlePlan.wobbleTilt * 0.8 * wobbleFade,
-            "XYZ"
-          );
-          currentQ.multiply(new THREE.Quaternion().setFromEuler(wobbleEuler));
-          die.body.quaternion.set(currentQ.x, currentQ.y, currentQ.z, currentQ.w);
-
-          if (progress >= 0.992) {
-            die.body.velocity.set(0, 0, 0);
-            die.body.angularVelocity.set(0, 0, 0);
-            die.body.position.set(
-              die.settlePlan.targetPosition.x,
-              0.42,
-              die.settlePlan.targetPosition.z
-            );
-            die.body.quaternion.set(
-              die.targetQuaternion.x,
-              die.targetQuaternion.y,
-              die.targetQuaternion.z,
-              die.targetQuaternion.w
-            );
+          if (dampingProgress > 0) {
+            const linearScale = 0.988 - dampingProgress * 0.075;
+            const angularScale = 0.982 - dampingProgress * 0.11;
+            die.body.velocity.scale(Math.max(0.88, linearScale), die.body.velocity);
+            die.body.angularVelocity.scale(Math.max(0.82, angularScale), die.body.angularVelocity);
+          }
+        });
+      } else if (rollingNow && now >= rollEndMs) {
+        diceSet.forEach((die) => {
+          if (die.body.position.y > 1.55) {
+            die.body.position.y = 1.55;
+            if (die.body.velocity.y > 0) die.body.velocity.y = 0;
+          }
+          die.body.velocity.scale(0.82, die.body.velocity);
+          die.body.angularVelocity.scale(0.76, die.body.angularVelocity);
+          if (die.body.velocity.lengthSquared() < 0.002 && die.body.angularVelocity.lengthSquared() < 0.002) {
             die.body.sleep();
           }
         });
       }
 
       diceSet.forEach((die) => {
+        if (die.body.position.y > 1.55) {
+          die.body.position.y = 1.55;
+          if (die.body.velocity.y > 0) die.body.velocity.y = 0;
+        }
         die.mesh.position.copy(die.body.position);
         die.mesh.quaternion.copy(die.body.quaternion);
         die.mesh.material.forEach?.((material) => {
@@ -2024,9 +2496,26 @@ function mount(container, room) {
       const displayedPoses = {
         ...cachedPoses,
       };
+      const displayedAlignments = Array.from({ length: YACHT_DICE_COUNT }, () => 1);
+      let maxMotion = 0;
       diceSet.forEach((die) => {
-        displayedValues[die.dieIndex] = Number(
-          normalizeDice(getLiveRoom().dice)[die.dieIndex] || room.dice?.[die.dieIndex] || 1
+        const currentQuaternion = new THREE.Quaternion(
+          die.body.quaternion.x,
+          die.body.quaternion.y,
+          die.body.quaternion.z,
+          die.body.quaternion.w
+        );
+        const topFace = readTopFaceValue(currentQuaternion);
+        displayedValues[die.dieIndex] = topFace.value;
+        displayedAlignments[die.dieIndex] = topFace.alignment;
+        maxMotion = Math.max(
+          maxMotion,
+          Math.abs(die.body.velocity.x),
+          Math.abs(die.body.velocity.y),
+          Math.abs(die.body.velocity.z),
+          Math.abs(die.body.angularVelocity.x) * 0.18,
+          Math.abs(die.body.angularVelocity.y) * 0.18,
+          Math.abs(die.body.angularVelocity.z) * 0.18
         );
         displayedPoses[die.dieIndex] = {
           position: {
@@ -2053,6 +2542,48 @@ function mount(container, room) {
         poses: displayedPoses,
         updatedAtMs: Date.now(),
       });
+      if (
+        !rollingNow &&
+        Number(getLiveRoom().rollCount || 0) > 0 &&
+        displayedValues.every((value) => Number(value || 0) === Number(displayedValues[0] || 0))
+      ) {
+        showYachtCelebration(container, poseCacheKey, seedBase);
+      }
+
+      if (rollingNow && !rollFinalizePromise && !document.hidden) {
+        const liveRoom = getLiveRoom();
+        const isCurrentTurnPlayer =
+          String(getCurrentTurnPlayer(liveRoom)?.uid || "") === String(yachtState.profile?.uid || "");
+        const valuesSignature = JSON.stringify(displayedValues);
+        const allReadable = displayedAlignments.every((alignment) => Number(alignment || 0) >= 0.68);
+        const isSettled = maxMotion < 0.18 && allReadable;
+        if (isCurrentTurnPlayer && isSettled) {
+          if (stableRollSignature !== valuesSignature) {
+            stableRollSignature = valuesSignature;
+            stableRollSinceMs = now;
+          } else if (now - stableRollSinceMs >= 320) {
+            const payload = {
+              roomId: liveRoom.id,
+              dice: displayedValues,
+              diceSeed: seedBase,
+              visualDiceState: {
+                diceSeed: seedBase,
+                values: displayedValues,
+                poses: displayedPoses,
+              },
+            };
+            rollFinalizePromise = callYachtAction("sync-visual-state", payload).catch((error) => {
+              if (!isIgnorableVisualSyncError(error)) {
+                console.warn("Failed to finalize settled yacht dice", error);
+              }
+              return false;
+            });
+          }
+        } else {
+          stableRollSignature = "";
+          stableRollSinceMs = 0;
+        }
+      }
       rafId = window.requestAnimationFrame(animate);
     }
 
@@ -2135,6 +2666,7 @@ function buildFinalRanking(room) {
                 <strong>${index + 1}위 · ${escapeHtml(player.characterName || "-")}</strong>
                 ${isMe ? '<span class="pill-badge yacht-result-me">나</span>' : ""}
               </div>
+              <p class="yacht-result-score">총점 ${Number(player.finalScore || 0)}점</p>
               <p class="muted">${escapeHtml(player.nickname || "-")}</p>
             </article>
           `;
@@ -2564,12 +3096,14 @@ async function restartFinishedRoomLegacy(roomId) {
 
 async function maybeAdvanceByTimeout() {
   const room = yachtState.room;
+  if (yachtActionUnauthorized) return;
   if (!room || String(room.status || "") !== ROOM_STATUS_PLAYING) return;
 
   const now = Date.now();
   if (String(room.actionPhase || "") === PHASE_ROLLING && Number(room.rollResolveAtMs || 0) <= now) {
     try {
-      await callYachtAction("advance-room", { roomId: room.id });
+      const result = await callYachtAction("advance-room", { roomId: room.id });
+      if (result?.advanced === "auto-roll") playYachtSfx("roll");
     } catch {
       // noop
     }
@@ -2578,11 +3112,33 @@ async function maybeAdvanceByTimeout() {
 
   if (String(room.actionPhase || "") === PHASE_AWAITING_ROLL && Number(room.actionDeadlineAtMs || 0) <= now) {
     try {
-      await callYachtAction("advance-room", { roomId: room.id });
+      const autoScoreFeedback = buildAutoScoreFeedback(room);
+      const result = await callYachtAction("advance-room", { roomId: room.id });
+      if (result?.advanced === "auto-roll") playYachtSfx("roll");
+      if (result?.advanced === "auto-score" && autoScoreFeedback) {
+        yachtScoreFeedback = autoScoreFeedback;
+        showYachtScoreFeedback(autoScoreFeedback.categoryId, autoScoreFeedback.score);
+        updatePlayingRoomView(yachtState.room || room);
+      }
     } catch {
       // noop
     }
   }
+}
+
+function buildAutoScoreFeedback(room) {
+  if (Number(room?.rollCount || 0) <= 0) return null;
+  const player = getCurrentTurnPlayer(room);
+  if (!player) return null;
+  const categoryId = pickBestScoreCategory(player.scoreSheet, normalizeDice(room.dice));
+  if (!categoryId) return null;
+  return {
+    roomId: room.id,
+    playerUid: player.uid,
+    categoryId,
+    score: calculateCategoryScore(categoryId, normalizeDice(room.dice)),
+    at: Date.now(),
+  };
 }
 
 async function resolveRollLegacy(roomId) {
@@ -2701,11 +3257,28 @@ async function autoScoreBestCategoryLegacy(roomId) {
 }
 
 async function callYachtAction(action, payload = {}) {
-  const response = await yachtActionCallable({
-    action,
-    ...payload,
-  });
-  return response?.data || {};
+  if (yachtActionUnauthorized) {
+    throw new Error("로그인이 만료되었습니다.");
+  }
+  try {
+    const response = await yachtActionCallable({
+      action,
+      ...payload,
+    });
+    return response?.data || {};
+  } catch (error) {
+    const code = String(error?.code || "");
+    const message = String(error?.message || "");
+    if (code.includes("unauthenticated") || code.includes("permission-denied") || message.includes("Unauthorized")) {
+      yachtActionUnauthorized = true;
+      window.clearInterval(automationIntervalId);
+      window.clearTimeout(automationWakeTimeoutId);
+      automationIntervalId = 0;
+      automationWakeTimeoutId = 0;
+      window.dispatchEvent(new CustomEvent("dueba-session-conflict"));
+    }
+    throw error;
+  }
 }
 
 async function createRoom(title) {
@@ -2726,7 +3299,7 @@ async function toggleReady(roomId) {
 }
 
 async function startGame(roomId) {
-  await callYachtAction("start-game", { roomId });
+  return callYachtAction("start-game", { roomId });
 }
 
 async function requestRoll(roomId) {
@@ -2759,11 +3332,23 @@ async function resolveRoll(roomId) {
 }
 
 async function toggleHold(roomId, dieIndex, extraPayload = null) {
-  await callYachtAction("toggle-hold", {
-    roomId,
-    dieIndex,
-    ...(extraPayload && typeof extraPayload === "object" ? extraPayload : {}),
-  });
+  const diceSeed = Number(extraPayload?.diceSeed || yachtState.room?.diceSeed || 0);
+  const key = `${roomId}:${diceSeed}:${dieIndex}`;
+  if (holdRequestKeys.has(key)) return;
+  holdRequestKeys.add(key);
+  try {
+    await callYachtAction("toggle-hold", {
+      roomId,
+      dieIndex,
+      ...(extraPayload && typeof extraPayload === "object" ? extraPayload : {}),
+    });
+  } finally {
+    holdRequestKeys.delete(key);
+  }
+}
+
+async function sendYachtEmote(roomId, emote) {
+  await callYachtAction("send-emote", { roomId, emote });
 }
 
 async function autoScoreBestCategory(roomId) {
@@ -2841,6 +3426,12 @@ async function clearActiveRoom() {
 function pseudoRandom(seed) {
   const x = Math.sin(seed * 12.9898) * 43758.5453;
   return x - Math.floor(x);
+}
+
+function hashYachtString(value) {
+  return String(value || "").split("").reduce((hash, char) => {
+    return (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }, 7);
 }
 
 function escapeHtml(value) {

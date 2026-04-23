@@ -30,7 +30,9 @@ service cloud.firestore {
           "factionName",
           "activeYachtRoomId",
           "activeYachtRole",
-          "activeYachtUpdatedAt"
+          "activeYachtUpdatedAt",
+          "activeSessionId",
+          "activeSessionUpdatedAt"
         ]);
       allow delete: if false;
     }
