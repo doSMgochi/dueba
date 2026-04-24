@@ -71,6 +71,10 @@ exports.ensureUserProfile = onCall(async (request) => {
       availableTraitPoints: 12,
       dismissedAnnouncementIds: [],
       inventory: [],
+      profileDecorations: [],
+      publicInventoryHiddenUntil: "",
+      factionDisguiseUntil: "",
+      factionDisguiseName: "",
       currency: 300,
       updatedAt: FieldValue.serverTimestamp(),
       createdAt: FieldValue.serverTimestamp(),
@@ -259,6 +263,9 @@ exports.getRankingBoard = onCall(async (request) => {
         nickname: data.nickname || "-",
         rankingPoints: Number(data.rankingPoints || 0),
         currency: Number(data.currency || 0),
+        factionName: String(data.factionName || "").trim(),
+        factionDisguiseName: String(data.factionDisguiseName || "").trim(),
+        factionDisguiseUntil: String(data.factionDisguiseUntil || "").trim(),
         totalTraitPoints: Number(data.availableTraitPoints || 0) + usedTraitPoints,
       };
     })
@@ -432,7 +439,9 @@ exports.createItemDefinition = onCall(async (request) => {
     shortLabel = "",
     icon = "🎁",
     spriteKey = "",
+    colorPreset = "",
     category = "기타 아이템",
+    foodCurrencyReward = 0,
     price = 0,
     sellInShop = true,
   } = request.data || {};
@@ -445,6 +454,9 @@ exports.createItemDefinition = onCall(async (request) => {
   const itemId = buildItemId(normalizedName);
   const normalizedPrice = Math.max(0, Number(price || 0));
   const shouldSellInShop = Boolean(sellInShop);
+  const normalizedCategory = normalizeItemCategory(category);
+  const normalizedFoodCurrencyReward =
+    normalizedCategory === "음식" ? Math.max(0, Math.floor(Number(foodCurrencyReward || 0))) : 0;
 
   await db.collection("item-db").doc(itemId).set(
     {
@@ -453,7 +465,9 @@ exports.createItemDefinition = onCall(async (request) => {
       shortLabel: String(shortLabel || normalizedName).trim(),
       icon: String(icon || "🎁").trim(),
       spriteKey: String(spriteKey || "").trim(),
-      category: normalizeItemCategory(category),
+      colorPreset: String(colorPreset || "").trim(),
+      category: normalizedCategory,
+      foodCurrencyReward: normalizedFoodCurrencyReward,
       sellInShop: shouldSellInShop,
       sortOrder: Date.now(),
       createdAt: FieldValue.serverTimestamp(),
@@ -468,6 +482,9 @@ exports.createItemDefinition = onCall(async (request) => {
         name: normalizedName,
         description: String(description || "").trim(),
         spriteKey: String(spriteKey || "").trim(),
+        colorPreset: String(colorPreset || "").trim(),
+        category: normalizedCategory,
+        foodCurrencyReward: normalizedFoodCurrencyReward,
         price: normalizedPrice,
         sortOrder: Date.now(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -492,7 +509,9 @@ exports.updateItemDefinition = onCall(async (request) => {
     shortLabel = "",
     icon = "🎁",
     spriteKey = "",
+    colorPreset = "",
     category = "기타 아이템",
+    foodCurrencyReward = 0,
     price = 0,
     sellInShop = true,
   } = request.data || {};
@@ -508,17 +527,29 @@ exports.updateItemDefinition = onCall(async (request) => {
   if (!itemSnapshot.exists) {
     throw new HttpsError("not-found", "Item definition was not found.");
   }
+  const previousItem = itemSnapshot.data() || {};
+  const matchingNames = buildItemMatchNames(previousItem.name, normalizedName);
 
   const normalizedPrice = Math.max(0, Number(price || 0));
   const shouldSellInShop = Boolean(sellInShop);
+  const normalizedCategory = normalizeItemCategory(category);
+  const normalizedDescription = String(description || "").trim();
+  const normalizedShortLabel = String(shortLabel || normalizedName).trim();
+  const normalizedIcon = String(icon || "🎁").trim();
+  const normalizedSpriteKey = String(spriteKey || "").trim();
+  const normalizedColorPreset = String(colorPreset || "").trim();
+  const normalizedFoodCurrencyReward =
+    normalizedCategory === "음식" ? Math.max(0, Math.floor(Number(foodCurrencyReward || 0))) : 0;
 
   await itemRef.update({
     name: normalizedName,
-    description: String(description || "").trim(),
-    shortLabel: String(shortLabel || normalizedName).trim(),
-    icon: String(icon || "🎁").trim(),
-    spriteKey: String(spriteKey || "").trim(),
-    category: normalizeItemCategory(category),
+    description: normalizedDescription,
+    shortLabel: normalizedShortLabel,
+    icon: normalizedIcon,
+    spriteKey: normalizedSpriteKey,
+    colorPreset: normalizedColorPreset,
+    category: normalizedCategory,
+    foodCurrencyReward: normalizedFoodCurrencyReward,
     sellInShop: shouldSellInShop,
     updatedAt: FieldValue.serverTimestamp(),
   });
@@ -527,9 +558,15 @@ exports.updateItemDefinition = onCall(async (request) => {
     await db.collection("shop").doc(normalizedItemId).set(
       {
         name: normalizedName,
-        description: String(description || "").trim(),
-        spriteKey: String(spriteKey || "").trim(),
+        description: normalizedDescription,
+        shortLabel: normalizedShortLabel,
+        icon: normalizedIcon,
+        spriteKey: normalizedSpriteKey,
+        colorPreset: normalizedColorPreset,
+        category: normalizedCategory,
+        foodCurrencyReward: normalizedFoodCurrencyReward,
         price: normalizedPrice,
+        sellInShop: true,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -546,19 +583,60 @@ exports.updateItemDefinition = onCall(async (request) => {
       let touched = false;
 
       const nextInventory = inventory.map((inventoryItem) => {
-        if (String(inventoryItem?.itemId || "") !== normalizedItemId) {
-          return inventoryItem;
+        let nextInventoryItem = inventoryItem;
+        if (itemMatchesDefinition(inventoryItem, normalizedItemId, matchingNames)) {
+          touched = true;
+          nextInventoryItem = {
+            ...inventoryItem,
+            name: normalizedName,
+            itemId: normalizedItemId,
+            description: normalizedDescription,
+            shortLabel: normalizedShortLabel,
+            icon: normalizedIcon,
+            spriteKey: normalizedSpriteKey,
+            colorPreset: normalizedColorPreset,
+            category: normalizedCategory,
+            foodCurrencyReward: normalizedFoodCurrencyReward,
+          };
         }
+        const nestedUpdatedItem = mapNestedStoredItem(nextInventoryItem, (storedItem) => {
+          if (!itemMatchesDefinition(storedItem, normalizedItemId, matchingNames)) {
+            return storedItem;
+          }
+          touched = true;
+          return {
+            ...storedItem,
+            name: normalizedName,
+            itemId: normalizedItemId,
+            description: normalizedDescription,
+            shortLabel: normalizedShortLabel,
+            icon: normalizedIcon,
+            spriteKey: normalizedSpriteKey,
+            colorPreset: normalizedColorPreset,
+            category: normalizedCategory,
+            foodCurrencyReward: normalizedFoodCurrencyReward,
+          };
+        });
+        return nestedUpdatedItem;
+      });
 
+      const currentDecorations = Array.isArray(data.profileDecorations) ? data.profileDecorations : [];
+      const nextProfileDecorations = currentDecorations.map((decoration) => {
+        if (!itemMatchesDefinition(decoration, normalizedItemId, matchingNames)) {
+          return decoration;
+        }
         touched = true;
         return {
-          ...inventoryItem,
+          ...decoration,
+          itemId: normalizedItemId,
           name: normalizedName,
-          description: String(description || "").trim(),
-          shortLabel: String(shortLabel || normalizedName).trim(),
-          icon: String(icon || "🎁").trim(),
-          spriteKey: String(spriteKey || "").trim(),
-          category: normalizeItemCategory(category),
+          description: normalizedDescription,
+          shortLabel: normalizedShortLabel,
+          icon: normalizedIcon,
+          spriteKey: normalizedSpriteKey,
+          colorPreset: normalizedColorPreset,
+          category: normalizedCategory,
+          foodCurrencyReward: normalizedFoodCurrencyReward,
         };
       });
 
@@ -568,6 +646,101 @@ exports.updateItemDefinition = onCall(async (request) => {
 
       return userDoc.ref.update({
         inventory: nextInventory,
+        profileDecorations: nextProfileDecorations,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    })
+  );
+
+  const parcelsSnapshot = await db.collection("parcels").get();
+  await Promise.all(
+    parcelsSnapshot.docs.map(async (parcelDoc) => {
+      const parcelData = parcelDoc.data();
+      let touched = false;
+      const currentItems = Array.isArray(parcelData.items) ? parcelData.items : [];
+      const nextItems = currentItems.map((parcelItem) => {
+        let nextParcelItem = parcelItem;
+        if (itemMatchesDefinition(parcelItem, normalizedItemId, matchingNames)) {
+          touched = true;
+          nextParcelItem = {
+            ...parcelItem,
+            itemId: normalizedItemId,
+            name: normalizedName,
+            description: normalizedDescription,
+            shortLabel: normalizedShortLabel,
+            icon: normalizedIcon,
+            spriteKey: normalizedSpriteKey,
+            colorPreset: normalizedColorPreset,
+            category: normalizedCategory,
+            foodCurrencyReward: normalizedFoodCurrencyReward,
+          };
+        }
+        return mapNestedStoredItem(nextParcelItem, (storedItem) => {
+          if (!itemMatchesDefinition(storedItem, normalizedItemId, matchingNames)) {
+            return storedItem;
+          }
+          touched = true;
+          return {
+            ...storedItem,
+            itemId: normalizedItemId,
+            name: normalizedName,
+            description: normalizedDescription,
+            shortLabel: normalizedShortLabel,
+            icon: normalizedIcon,
+            spriteKey: normalizedSpriteKey,
+            colorPreset: normalizedColorPreset,
+            category: normalizedCategory,
+            foodCurrencyReward: normalizedFoodCurrencyReward,
+          };
+        });
+      });
+
+      const currentPrimaryItem = parcelData.item;
+      const nextPrimaryItem =
+        currentPrimaryItem && itemMatchesDefinition(currentPrimaryItem, normalizedItemId, matchingNames)
+          ? {
+              ...currentPrimaryItem,
+              itemId: normalizedItemId,
+              name: normalizedName,
+              description: normalizedDescription,
+              shortLabel: normalizedShortLabel,
+              icon: normalizedIcon,
+              spriteKey: normalizedSpriteKey,
+              colorPreset: normalizedColorPreset,
+              category: normalizedCategory,
+              foodCurrencyReward: normalizedFoodCurrencyReward,
+            }
+          : currentPrimaryItem;
+      const nextPrimaryItemWithNested = mapNestedStoredItem(nextPrimaryItem, (storedItem) => {
+        if (!itemMatchesDefinition(storedItem, normalizedItemId, matchingNames)) {
+          return storedItem;
+        }
+        touched = true;
+        return {
+          ...storedItem,
+          itemId: normalizedItemId,
+          name: normalizedName,
+          description: normalizedDescription,
+          shortLabel: normalizedShortLabel,
+          icon: normalizedIcon,
+          spriteKey: normalizedSpriteKey,
+          colorPreset: normalizedColorPreset,
+          category: normalizedCategory,
+          foodCurrencyReward: normalizedFoodCurrencyReward,
+        };
+      });
+
+      if (nextPrimaryItemWithNested !== currentPrimaryItem) {
+        touched = true;
+      }
+
+      if (!touched) {
+        return null;
+      }
+
+      return parcelDoc.ref.update({
+        item: nextPrimaryItemWithNested || null,
+        items: nextItems,
         updatedAt: FieldValue.serverTimestamp(),
       });
     })
@@ -584,11 +757,71 @@ exports.deleteItemDefinition = onCall(async (request) => {
   if (!normalizedItemId) {
     throw new HttpsError("invalid-argument", "Item id is required.");
   }
+  const itemSnapshot = await db.collection("item-db").doc(normalizedItemId).get();
+  const matchingNames = buildItemMatchNames(itemSnapshot.data()?.name);
 
   await Promise.all([
     db.collection("item-db").doc(normalizedItemId).delete(),
     db.collection("shop").doc(normalizedItemId).delete(),
   ]);
+
+  const usersSnapshot = await db.collection("users").get();
+  await Promise.all(
+    usersSnapshot.docs.map(async (userDoc) => {
+      const data = userDoc.data();
+      const currentInventory = Array.isArray(data.inventory) ? data.inventory : [];
+      const nextInventory = currentInventory
+        .filter((item) => !itemMatchesDefinition(item, normalizedItemId, matchingNames))
+        .map((item) =>
+          mapNestedStoredItem(item, (storedItem) =>
+            itemMatchesDefinition(storedItem, normalizedItemId, matchingNames) ? null : storedItem
+          )
+        );
+      const currentDecorations = Array.isArray(data.profileDecorations) ? data.profileDecorations : [];
+      const nextDecorations = currentDecorations.filter((item) => !itemMatchesDefinition(item, normalizedItemId, matchingNames));
+
+      if (nextInventory.length === currentInventory.length && nextDecorations.length === currentDecorations.length) {
+        return null;
+      }
+
+      return userDoc.ref.update({
+        inventory: nextInventory,
+        profileDecorations: nextDecorations,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    })
+  );
+
+  const parcelsSnapshot = await db.collection("parcels").get();
+  await Promise.all(
+    parcelsSnapshot.docs.map(async (parcelDoc) => {
+      const data = parcelDoc.data();
+      const currentItems = Array.isArray(data.items) ? data.items : [];
+      const nextItems = currentItems
+        .filter((item) => !itemMatchesDefinition(item, normalizedItemId, matchingNames))
+        .map((item) =>
+          mapNestedStoredItem(item, (storedItem) =>
+            itemMatchesDefinition(storedItem, normalizedItemId, matchingNames) ? null : storedItem
+          )
+        );
+      const currentPrimaryItem = data.item;
+      const nextPrimaryItem =
+        currentPrimaryItem && itemMatchesDefinition(currentPrimaryItem, normalizedItemId, matchingNames) ? null : currentPrimaryItem;
+      const nextPrimaryItemWithNested = mapNestedStoredItem(nextPrimaryItem, (storedItem) =>
+        itemMatchesDefinition(storedItem, normalizedItemId, matchingNames) ? null : storedItem
+      );
+
+      if (nextItems.length === currentItems.length && nextPrimaryItemWithNested === currentPrimaryItem) {
+        return null;
+      }
+
+      return parcelDoc.ref.update({
+        item: nextPrimaryItemWithNested,
+        items: nextItems,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    })
+  );
 
   return { ok: true, itemId: normalizedItemId };
 });
@@ -634,6 +867,8 @@ exports.purchaseShopItem = onCall(async (request) => {
         description: shopItem.description,
         shortLabel: shopItem.name,
         icon: "🎁",
+        spriteKey: String(shopItem.spriteKey || "").trim(),
+        colorPreset: String(shopItem.colorPreset || "").trim(),
         category: "상점",
       };
 
@@ -982,6 +1217,7 @@ exports.useInventoryItem = onCall(async (request) => {
     itemDefinition?.useConfig && typeof itemDefinition.useConfig === "object"
       ? itemDefinition.useConfig
       : {};
+  const normalizedCategory = normalizeItemCategory(itemDefinition?.category || usedItem?.category);
 
   if (Array.isArray(useConfig.requiredFields) && useConfig.requiredFields.length) {
     const missingField = useConfig.requiredFields.find((field) => !String(extraData?.[field] || "").trim());
@@ -990,22 +1226,149 @@ exports.useInventoryItem = onCall(async (request) => {
     }
   }
 
-  inventory.splice(itemIndex, 1);
-  await userSnapshot.ref.update({
-    inventory,
-    updatedAt: FieldValue.serverTimestamp(),
-  });
-
+  const nextInventory = [...inventory];
   const receiptCode = `[${String(request.auth.uid || "UID").slice(0, 6).toUpperCase()}-${Math.random()
     .toString(36)
     .slice(2, 8)
     .toUpperCase()}]`;
-  const effectDescription = String(
+  const nextProfileDecorations = Array.isArray(userData.profileDecorations) ? [...userData.profileDecorations] : [];
+  let effectDescription = String(
     itemDefinition?.useEffectDescription ||
       itemDefinition?.description ||
       usedItem.description ||
       "아이템 효과 설명은 아직 등록되지 않았습니다."
   ).trim();
+  let createdDecoration = null;
+  let grantedCurrency = 0;
+  let stolenItem = null;
+  const normalizedItemName = normalizeSystemItemName(usedItem?.name || itemDefinition?.name || "");
+  const shouldConsumeItem = normalizedItemName !== "금고";
+
+  if (shouldConsumeItem) {
+    nextInventory.splice(itemIndex, 1);
+  }
+
+  if (normalizedCategory === "프로필 꾸미기") {
+    const spriteKey = String(usedItem?.spriteKey || itemDefinition?.spriteKey || "").trim();
+    if (!spriteKey) {
+      throw new HttpsError("failed-precondition", "프로필 꾸미기 아이템에는 도트 이미지가 필요합니다.");
+    }
+    createdDecoration = {
+      id: `profile-decor-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      itemId: String(usedItem?.itemId || itemDefinition?.id || "").trim(),
+      name: String(usedItem?.name || itemDefinition?.name || "프로필 장식").trim(),
+      spriteKey,
+      colorPreset: String(usedItem?.colorPreset || itemDefinition?.colorPreset || "").trim(),
+      x: 0.5,
+      y: 0.5,
+      createdAt: new Date().toISOString(),
+    };
+    nextProfileDecorations.push(createdDecoration);
+    effectDescription = `${createdDecoration.name} 장식을 간단 프로필에 추가했습니다.`;
+  }
+
+  const profileUpdates = {};
+  if (normalizedItemName === "낡은 차광포") {
+    profileUpdates.publicInventoryHiddenUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    effectDescription = "24시간 동안 공개 프로필의 인벤토리를 비공개로 전환했습니다.";
+  } else if (normalizedItemName === "차광포") {
+    profileUpdates.publicInventoryHiddenUntil = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+    effectDescription = "72시간 동안 공개 프로필의 인벤토리를 비공개로 전환했습니다.";
+  } else if (normalizedItemName === "위장 물약") {
+    const disguiseFactionName = String(request.data?.extraData?.targetFactionName || "").trim();
+    if (!allowedFactions.has(disguiseFactionName)) {
+      throw new HttpsError("invalid-argument", "위장할 진영을 올바르게 선택해 주세요.");
+    }
+    if (disguiseFactionName === String(userData.factionName || "").trim()) {
+      throw new HttpsError("failed-precondition", "현재 진영과 다른 진영으로만 위장할 수 있습니다.");
+    }
+    profileUpdates.factionDisguiseName = disguiseFactionName;
+    profileUpdates.factionDisguiseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    effectDescription = `24시간 동안 공개 프로필의 진영을 ${disguiseFactionName}(으)로 위장합니다.`;
+  } else if (normalizedItemName === "식칼") {
+    const targetCharacterName = String(extraData?.targetCharacterName || "").trim();
+    if (!targetCharacterName) {
+      throw new HttpsError("invalid-argument", "대상 캐릭터 이름을 입력해 주세요.");
+    }
+    if (targetCharacterName === String(userData.characterName || "").trim()) {
+      throw new HttpsError("failed-precondition", "자기 자신에게는 사용할 수 없습니다.");
+    }
+
+    const targetSnapshot = await findUserSnapshotByCharacterName(targetCharacterName);
+    if (!targetSnapshot) {
+      throw new HttpsError("not-found", "대상 캐릭터를 찾지 못했습니다.");
+    }
+    const targetData = targetSnapshot.data() || {};
+    const targetInventory = Array.isArray(targetData.inventory) ? [...targetData.inventory] : [];
+    const stealableIndexes = targetInventory
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => !isSafeItem(item));
+
+    if (!stealableIndexes.length) {
+      effectDescription = `${targetCharacterName}의 인벤토리를 뒤졌지만 훔쳐올 수 있는 아이템이 없었습니다.`;
+    } else {
+      const selectedEntry = stealableIndexes[Math.floor(Math.random() * stealableIndexes.length)];
+      stolenItem = normalizeSystemInventoryItem(targetInventory.splice(selectedEntry.index, 1)[0]);
+      nextInventory.push(stolenItem);
+
+      await targetSnapshot.ref.update({
+        inventory: targetInventory,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      effectDescription = `${targetCharacterName}의 인벤토리에서 ${String(stolenItem?.name || "아이템").trim()} 하나를 훔쳐왔습니다.`;
+    }
+  } else if (normalizedItemName === "금고") {
+    const storedItem = normalizeStoredInventoryItem(usedItem?.storedItem);
+    if (storedItem) {
+      nextInventory[itemIndex] = {
+        ...usedItem,
+        storedItem: null,
+      };
+      delete nextInventory[itemIndex].storedItem;
+      nextInventory.push(storedItem);
+      effectDescription = `${storedItem.name}을(를) 금고에서 꺼내 인벤토리로 되돌렸습니다.`;
+    } else {
+      const storedItemKey = String(extraData?.storedItemKey || "").trim();
+      if (!storedItemKey) {
+        throw new HttpsError("invalid-argument", "금고에 넣을 아이템을 선택해 주세요.");
+      }
+      const candidateIndex = nextInventory.findIndex((item, index) =>
+        index !== itemIndex && buildInventoryItemKey(item) === storedItemKey
+      );
+      if (candidateIndex === -1) {
+        throw new HttpsError("not-found", "금고에 넣을 아이템을 찾지 못했습니다.");
+      }
+      const candidateItem = nextInventory[candidateIndex];
+      if (isSafeItem(candidateItem)) {
+        throw new HttpsError("failed-precondition", "금고는 다른 금고를 보관할 수 없습니다.");
+      }
+      nextInventory.splice(candidateIndex, 1);
+      const safeIndex = candidateIndex < itemIndex ? itemIndex - 1 : itemIndex;
+      nextInventory[safeIndex] = {
+        ...usedItem,
+        storedItem: normalizeStoredInventoryItem(candidateItem),
+      };
+      effectDescription = `${String(candidateItem?.name || "아이템").trim()}을(를) 금고에 보관했습니다.`;
+    }
+  }
+
+  if (normalizedCategory === "음식") {
+    grantedCurrency = Math.max(
+      0,
+      Math.floor(Number(itemDefinition?.foodCurrencyReward ?? usedItem?.foodCurrencyReward ?? 0))
+    );
+    if (grantedCurrency > 0) {
+      profileUpdates.currency = Math.max(0, Number(userData.currency || 0)) + grantedCurrency;
+      effectDescription = `${effectDescription} 환 ${grantedCurrency}을(를) 추가로 획득했습니다.`;
+    }
+  }
+
+  await userSnapshot.ref.update({
+    inventory: nextInventory,
+    profileDecorations: nextProfileDecorations,
+    ...profileUpdates,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
 
   return {
     ok: true,
@@ -1013,6 +1376,71 @@ exports.useInventoryItem = onCall(async (request) => {
     receiptCode,
     effectDescription,
     useConfig: serialize(useConfig),
+    profileDecorations: serialize(nextProfileDecorations),
+    createdDecoration: serialize(createdDecoration),
+    grantedCurrency,
+    stolenItem: serialize(stolenItem),
+    profileUpdates: serialize(profileUpdates),
+  };
+});
+
+exports.returnProfileDecorationToInventory = onCall(async (request) => {
+  assertAuthenticated(request);
+
+  const decorationId = String(request.data?.decorationId || "").trim();
+  if (!decorationId) {
+    throw new HttpsError("invalid-argument", "장식 ID가 필요합니다.");
+  }
+
+  const userSnapshot = await findUserSnapshotByUid(request.auth.uid);
+  if (!userSnapshot) {
+    throw new HttpsError("not-found", "User profile was not found.");
+  }
+
+  const userData = userSnapshot.data();
+  const profileDecorations = Array.isArray(userData.profileDecorations) ? [...userData.profileDecorations] : [];
+  const decorationIndex = profileDecorations.findIndex((item) => String(item?.id || "").trim() === decorationId);
+  if (decorationIndex === -1) {
+    throw new HttpsError("not-found", "프로필 장식을 찾지 못했습니다.");
+  }
+
+  const decoration = profileDecorations.splice(decorationIndex, 1)[0];
+  const inventory = Array.isArray(userData.inventory) ? [...userData.inventory] : [];
+  const itemDefinitionSnapshot = decoration?.itemId
+    ? await db.collection("item-db").doc(String(decoration.itemId)).get()
+    : null;
+  const itemDefinition = itemDefinitionSnapshot?.exists
+    ? { id: itemDefinitionSnapshot.id, ...itemDefinitionSnapshot.data() }
+    : null;
+
+  inventory.push(
+    buildInventoryItemFromDefinition(
+      itemDefinition || {
+        id: String(decoration?.itemId || "").trim(),
+        name: String(decoration?.name || "프로필 장식").trim(),
+        description: "",
+        shortLabel: String(decoration?.name || "프로필 장식").trim(),
+        icon: "🎁",
+        spriteKey: String(decoration?.spriteKey || "").trim(),
+        colorPreset: String(decoration?.colorPreset || "").trim(),
+        category: "프로필 꾸미기",
+      }
+    )
+  );
+
+  await userSnapshot.ref.update({
+    inventory,
+    profileDecorations,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  const updatedSnapshot = await userSnapshot.ref.get();
+  return {
+    ok: true,
+    profile: {
+      docId: updatedSnapshot.id,
+      ...serialize(updatedSnapshot.data()),
+    },
   };
 });
 
@@ -1842,9 +2270,9 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
         senderCurrency += chargeAmount;
       }
       if (Array.isArray(currentParcel.items) && currentParcel.items.length) {
-        receiverInventory.push(...currentParcel.items);
+        receiverInventory.push(...currentParcel.items.map((item) => normalizeSystemInventoryItem(item)));
       } else if (currentParcel.item) {
-        receiverInventory.push(currentParcel.item);
+        receiverInventory.push(normalizeSystemInventoryItem(currentParcel.item));
       }
       receiverCurrency += Number(currentParcel.currencyAmount || 0);
       transaction.update(receiverSnapshot.ref, {
@@ -1860,9 +2288,9 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
       }
     } else {
       if (Array.isArray(currentParcel.items) && currentParcel.items.length) {
-        senderInventory.push(...currentParcel.items);
+        senderInventory.push(...currentParcel.items.map((item) => normalizeSystemInventoryItem(item)));
       } else if (currentParcel.item) {
-        senderInventory.push(currentParcel.item);
+        senderInventory.push(normalizeSystemInventoryItem(currentParcel.item));
       }
       senderCurrency += Number(currentParcel.currencyAmount || 0);
       transaction.update(senderSnapshot.ref, {
@@ -2576,6 +3004,7 @@ function normalizeItemCategory(category) {
     ["음식", "음식"],
     ["의상", "치장 아이템"],
     ["치장 아이템", "치장 아이템"],
+    ["프로필 꾸미기", "프로필 꾸미기"],
     ["화폐", "화폐"],
   ]);
   return categoryMap.get(normalizedCategory) || "기타 아이템";
@@ -2589,7 +3018,9 @@ function buildInventoryItemFromDefinition(item) {
     shortLabel: String(item.shortLabel || item.name || "지급 아이템").trim(),
     icon: String(item.icon || "🎁").trim(),
     spriteKey: String(item.spriteKey || "").trim(),
+    colorPreset: String(item.colorPreset || "").trim(),
     category: normalizeItemCategory(item.category),
+    foodCurrencyReward: Math.max(0, Math.floor(Number(item.foodCurrencyReward || 0))),
     grantedAt: new Date().toISOString(),
   });
 }
@@ -2603,6 +3034,60 @@ function normalizeSystemItemName(name) {
   if (["포장지", "택배상자", "택배 상자"].includes(normalized)) return "택배 상자";
   if (["거절권", "폐기 승인서"].includes(normalized)) return "폐기 승인서";
   return normalized;
+}
+
+function isSafeItem(item) {
+  return normalizeSystemItemName(item?.name) === "금고";
+}
+
+function normalizeStoredInventoryItem(item) {
+  if (!item || typeof item !== "object") return null;
+  return normalizeSystemInventoryItem({
+    itemId: String(item.itemId || "").trim(),
+    name: String(item.name || item.itemId || "아이템").trim(),
+    description: String(item.description || "").trim(),
+    shortLabel: String(item.shortLabel || item.name || "보관 아이템").trim(),
+    icon: String(item.icon || "🎁").trim(),
+    spriteKey: String(item.spriteKey || "").trim(),
+    colorPreset: String(item.colorPreset || "").trim(),
+    category: normalizeItemCategory(item.category),
+    foodCurrencyReward: Math.max(0, Math.floor(Number(item.foodCurrencyReward || 0))),
+    grantedAt: String(item.grantedAt || new Date().toISOString()).trim(),
+  });
+}
+
+function mapNestedStoredItem(item, mapper) {
+  if (!item || typeof item !== "object" || !item.storedItem || typeof mapper !== "function") {
+    return item;
+  }
+  const nextStoredItem = mapper(item.storedItem);
+  if (nextStoredItem === item.storedItem) {
+    return item;
+  }
+  if (!nextStoredItem) {
+    const nextItem = { ...item };
+    delete nextItem.storedItem;
+    return nextItem;
+  }
+  return {
+    ...item,
+    storedItem: nextStoredItem,
+  };
+}
+
+function buildItemMatchNames(...names) {
+  return new Set(names.map((name) => normalizeSystemItemName(name)).filter(Boolean));
+}
+
+function itemMatchesDefinition(item, itemId, names = new Set()) {
+  const normalizedItemId = String(itemId || "").trim();
+  const normalizedNames = names instanceof Set ? names : buildItemMatchNames(...[].concat(names || []));
+  const candidateId = String(item?.itemId || "").trim();
+  const candidateName = normalizeSystemItemName(item?.name);
+  return Boolean(
+    (normalizedItemId && candidateId === normalizedItemId) ||
+      (candidateName && normalizedNames.has(candidateName))
+  );
 }
 
 function normalizeSystemInventoryItem(item) {

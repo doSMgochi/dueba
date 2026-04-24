@@ -18,8 +18,11 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-storage.js";
 import { db, storage } from "./firebase.js";
 import {
+  buildItemImageStyleAttribute,
   buildItemSpritePicker,
+  getItemColorPresetFilter,
   getItemSprite,
+  ITEM_COLOR_PRESETS,
   getItemSpriteCategory,
   getItemSpriteUrl,
   itemSpriteCategories,
@@ -41,15 +44,18 @@ import {
   purchaseShopItem,
   refreshCurrentUserProfile,
   respondParcel,
+  returnProfileDecorationToInventory,
   sendParcel,
   changeUserPassword,
   updateMemberProfile,
+  updateProfileDecorations,
   useInventoryItem,
   updateItemDefinition,
   updateProfileSealImage,
 } from "./auth.js";
 
 const SYSTEM_INVENTORY_ITEM_NAMES = new Set(["망치", "택배 상자", "택배상자", "포장지", "폐기 승인서", "거절권"]);
+const PROFILE_FACTION_OPTIONS = ["매화", "난초", "국화", "대나무"];
 
 export const menuDefinitions = [
   { id: "ranking", label: "랭킹" },
@@ -327,7 +333,7 @@ function renderMenuContent(menuId, profile) {
     .map(({ item, count }) => {
       const displayItem = normalizeSystemInventoryItemForDisplay(item);
       const canUseItem = !isSystemInventoryItem(displayItem);
-      const tooltip = escapeHtml(`${displayItem.name || "이름 없는 아이템"} | ${displayItem.description || "설명이 아직 등록되지 않았습니다."}`);
+      const tooltip = escapeHtml(buildInventoryTooltipText(displayItem));
       const safeGroupKey = escapeHtml(buildInventoryGroupKey(item));
       return `
         <li class="inventory-item inventory-tooltip draggable-item" data-tooltip="${tooltip}" draggable="true" data-inventory-group-key="${safeGroupKey}">
@@ -1118,18 +1124,20 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
       item.nickname === profile.nickname
   );
   const isOwnProfile = viewerProfile?.uid && viewerProfile.uid === profile.uid;
-  const factionName = String(profile.factionName || "").trim();
+  const factionName = getDisplayedProfileFactionName(profile, isOwnProfile);
   const factionThemeClass = getFactionThemeClass(factionName);
+  const profileDecorations = normalizeProfileDecorations(profile.profileDecorations);
+  const inventoryHiddenForViewer = !isOwnProfile && isPublicInventoryHidden(profile);
   const nicknameList = [profile.nickname, ...(Array.isArray(profile.extraNicknames) ? profile.extraNicknames : [])]
     .map((item) => String(item || "").trim())
     .filter(Boolean);
   const inventoryKinds = buildGroupedInventoryItems(profile.inventory || []);
-  const inventorySummary = inventoryKinds.length
+  const inventorySummary = inventoryHiddenForViewer
+    ? '<span class="profile-item-empty">차광포로 비공개 처리되어 있습니다.</span>'
+    : inventoryKinds.length
     ? inventoryKinds
         .map(({ item, count }) => {
-          const tooltip = escapeHtml(
-            `${item.name || "이름 없는 아이템"} | ${item.description || "설명이 아직 등록되지 않았습니다."}`
-          );
+          const tooltip = escapeHtml(buildInventoryTooltipText(item));
           return `
             <div class="profile-item-chip inventory-tooltip" data-tooltip="${tooltip}">
               ${renderProfileItemVisual(item)}
@@ -1145,6 +1153,9 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
       <div class="profile-lobby-card profile-lobby-card-enter ${factionThemeClass}">
         <div class="profile-card-frame profile-card-frame-outer" aria-hidden="true"></div>
         <div class="profile-card-frame profile-card-frame-inner" aria-hidden="true"></div>
+        <div class="profile-decoration-layer" data-profile-decoration-layer data-profile-decoration-editable="${isOwnProfile ? "true" : "false"}">
+          ${profileDecorations.map((item) => renderProfileDecorationVisual(item, isOwnProfile)).join("")}
+        </div>
         <div class="profile-lobby-visual">
           <div class="profile-seal-panel">
             ${
@@ -1166,13 +1177,15 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
             <div><span>보유 환</span><strong>${Number(profile.currency || 0)} 환</strong></div>
           </div>
           <div class="profile-lobby-traits">
-            <span>${isOwnProfile ? "보유 아이템 요약" : "공개 인벤토리 요약"}</span>
+            <span>${isOwnProfile ? "보유 아이템 요약" : inventoryHiddenForViewer ? "공개 인벤토리 비공개 중" : "공개 인벤토리 요약"}</span>
             <div class="profile-item-summary">${inventorySummary}</div>
           </div>
         </div>
       </div>
     </div>
   `;
+  profile.profileDecorations = profileDecorations;
+  bindProfileDecorationEditor({ modal, profile, onProfilePatched, onToast });
 
   sealButton.classList.toggle("hidden", !isOwnProfile);
   fileInput.classList.add("hidden");
@@ -1498,7 +1511,7 @@ async function hydrateRankingPanel() {
             <td>${escapeHtml(item.nickname || "-")}</td>
             <td>${Number(item.rankingPoints || 0)}</td>
             <td>${Number(item.currency || 0)} 환</td>
-            <td>${escapeHtml(item.factionName || "-")}</td>
+            <td>${escapeHtml(getDisplayedRankingFactionName(item) || "-")}</td>
           </tr>
         `;
       })
@@ -1711,7 +1724,7 @@ function attachParcelForm({ profile, onProfilePatched, onToast }) {
       }
 
       try {
-        const extraData = await requestInventoryItemExtraData(availableItem);
+        const extraData = await requestInventoryItemExtraData(availableItem, profile);
         const result = await withPendingToast(onToast, () =>
           useInventoryItem(buildInventoryItemKey(availableItem), extraData)
         );
@@ -2668,6 +2681,11 @@ function renderAdminItemSection() {
           <span>도트 선택</span>
           ${buildItemSpritePicker({ pickerId: "admin-item-create-picker" })}
         </label>
+        <div class="item-color-preset-row">
+          <span>도트 색상</span>
+          <input type="hidden" name="colorPreset" value="" />
+          <div class="item-color-preset-list" data-color-preset-list>${buildItemColorPresetButtons()}</div>
+        </div>
         <input type="hidden" name="category" value="기타" />
         <div class="auto-category-badge-row">
           <span>자동 카테고리</span>
@@ -2681,6 +2699,10 @@ function renderAdminItemSection() {
           <select name="categoryOverride">${buildCategoryOverrideOptions()}</select>
         </label>
         <label><span>설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
+        <label class="hidden" data-food-reward-row>
+          <span>음용 시 추가 환</span>
+          <input type="number" min="0" step="1" name="foodCurrencyReward" value="0" />
+        </label>
         <label class="item-shop-toggle">
           <input type="checkbox" name="sellInShop" />
           <span class="item-shop-toggle-box" aria-hidden="true"></span>
@@ -2701,6 +2723,11 @@ function renderAdminItemSection() {
           <span>도트 선택</span>
           ${buildItemSpritePicker({ pickerId: "admin-item-edit-picker" })}
         </label>
+        <div class="item-color-preset-row">
+          <span>도트 색상</span>
+          <input type="hidden" name="colorPreset" value="" />
+          <div class="item-color-preset-list" data-color-preset-list>${buildItemColorPresetButtons()}</div>
+        </div>
         <input type="hidden" name="category" value="기타" />
         <div class="auto-category-badge-row">
           <span>자동 카테고리</span>
@@ -2714,6 +2741,10 @@ function renderAdminItemSection() {
           <select name="categoryOverride">${buildCategoryOverrideOptions()}</select>
         </label>
         <label><span>설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
+        <label class="hidden" data-food-reward-row>
+          <span>음용 시 추가 환</span>
+          <input type="number" min="0" step="1" name="foodCurrencyReward" value="0" />
+        </label>
         <label class="item-shop-toggle">
           <input type="checkbox" name="sellInShop" />
           <span class="item-shop-toggle-box" aria-hidden="true"></span>
@@ -2841,6 +2872,9 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(itemForm).entries());
       payload.sellInShop = itemForm.elements.sellInShop.checked;
+      if (String(itemForm.elements.category.value || "").trim() !== "음식") {
+        payload.foodCurrencyReward = 0;
+      }
 
       try {
         await withPendingToast(onToast, () => createItemDefinition(payload));
@@ -2850,6 +2884,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         await loadAdminItemCatalog(true);
         await hydrateAdminItemOptions();
         refreshAdminItemSelectors({ root: document });
+        await onProfilePatched();
         onToast("아이템 DB에 새 아이템을 추가했습니다.");
       } catch (error) {
         onToast(error.message, true);
@@ -2881,6 +2916,8 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         syncItemSpritePicker(itemEditForm.querySelector("[data-sprite-picker]"), item.spriteKey || "");
         itemEditForm.elements.category.value = item.category || getItemSpriteCategory(item.spriteKey || "");
         itemEditForm.elements.description.value = item.description || "";
+        itemEditForm.elements.colorPreset.value = String(item.colorPreset || "");
+        itemEditForm.elements.foodCurrencyReward.value = String(Math.max(0, Number(item.foodCurrencyReward || 0)));
         itemEditForm.elements.price.value = String(Number(shopItem?.price || 0));
         itemEditForm.elements.sellInShop.checked = Boolean(shopItem);
         bindAdminItemMetaForm(itemEditForm, true);
@@ -2893,6 +2930,9 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(itemEditForm).entries());
       payload.sellInShop = itemEditForm.elements.sellInShop.checked;
+      if (String(itemEditForm.elements.category.value || "").trim() !== "음식") {
+        payload.foodCurrencyReward = 0;
+      }
       try {
         await withPendingToast(onToast, () => updateItemDefinition(payload));
         await loadAdminItemCatalog(true);
@@ -2901,6 +2941,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
           root: document,
           preferredValues: new Map([[editSelect?.id || "", String(payload.itemId || "").trim()]]),
         });
+        await onProfilePatched();
         onToast("아이템 정보를 수정했습니다.");
       } catch (error) {
         onToast(error.message, true);
@@ -2932,6 +2973,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         await loadAdminItemCatalog(true);
         await hydrateAdminItemOptions();
         refreshAdminItemSelectors({ root: document });
+        await onProfilePatched();
         onToast("아이템을 삭제했습니다.");
       } catch (error) {
         onToast(error.message, true);
@@ -3084,7 +3126,7 @@ function hideAnnouncementModal() {
   if (modal) modal.classList.add("hidden");
 }
 
-async function requestInventoryItemExtraData(item) {
+async function requestInventoryItemExtraData(item, profile = null) {
   let config = item?.useConfig && typeof item.useConfig === "object" ? item.useConfig : {};
   if ((!config || !Array.isArray(config.fields)) && item?.itemId) {
     try {
@@ -3096,6 +3138,9 @@ async function requestInventoryItemExtraData(item) {
     } catch (_error) {
       // Ignore lookup failures and treat as a direct-use item.
     }
+  }
+  if (!Array.isArray(config.fields) || !config.fields.length) {
+    config = getSpecialInventoryUseConfig(item, profile) || config;
   }
   const fields = Array.isArray(config.fields) ? config.fields : [];
   if (!fields.length) {
@@ -3113,18 +3158,30 @@ async function requestInventoryItemExtraData(item) {
   }
 
   title.textContent = `${item.name || "아이템"} 사용 준비`;
-  subtitle.textContent = "이 아이템은 사용 전에 추가 입력을 받을 수 있도록 확장되어 있습니다.";
+  subtitle.textContent = config?.subtitle || "이 아이템은 사용 전에 추가 입력을 받을 수 있도록 확장되어 있습니다.";
   form.innerHTML = fields
     .map(
       (field) => `
         <label>
           <span>${escapeHtml(field.label || field.name || "입력값")}</span>
-          <input
-            type="${escapeHtml(field.type || "text")}"
-            name="${escapeHtml(field.name || "")}"
-            placeholder="${escapeHtml(field.placeholder || "")}"
-            ${field.required === false ? "" : "required"}
-          />
+          ${
+            field.type === "select"
+              ? `<select name="${escapeHtml(field.name || "")}" ${field.required === false ? "" : "required"}>
+                  <option value="">선택해 주세요</option>
+                  ${(Array.isArray(field.options) ? field.options : [])
+                    .map(
+                      (option) =>
+                        `<option value="${escapeHtml(option.value || option.label || "")}">${escapeHtml(option.label || option.value || "")}</option>`
+                    )
+                    .join("")}
+                </select>`
+              : `<input
+                  type="${escapeHtml(field.type || "text")}"
+                  name="${escapeHtml(field.name || "")}"
+                  placeholder="${escapeHtml(field.placeholder || "")}"
+                  ${field.required === false ? "" : "required"}
+                />`
+          }
         </label>
       `
     )
@@ -3157,6 +3214,67 @@ async function requestInventoryItemExtraData(item) {
     cancelButton.onclick = cancel;
     closeIcon.onclick = cancel;
   });
+}
+
+function getSpecialInventoryUseConfig(item, profile = null) {
+  const itemName = normalizeSystemItemName(item?.name || "");
+  if (itemName !== "위장 물약") {
+    if (itemName === "식칼") {
+      return {
+        subtitle: "대상 캐릭터명을 입력하면 상대 인벤토리에서 랜덤 아이템 1개를 훔칩니다.",
+        fields: [
+          {
+            type: "text",
+            name: "targetCharacterName",
+            label: "대상 캐릭터 이름",
+            placeholder: "캐릭터 이름 입력",
+            required: true,
+          },
+        ],
+      };
+    }
+    if (itemName === "금고" && !item?.storedItem) {
+      const inventoryItems = Array.isArray(profile?.inventory) ? profile.inventory : [];
+      const currentItemKey = buildInventoryItemKey(item);
+      const candidates = inventoryItems
+        .filter((candidate) => buildInventoryItemKey(candidate) !== currentItemKey)
+        .filter((candidate) => normalizeSystemItemName(candidate?.name || "") !== "금고");
+      if (!candidates.length) {
+        throw new Error("금고에 넣을 수 있는 인벤토리 아이템이 없습니다.");
+      }
+      return {
+        subtitle: "금고에 보관할 아이템을 선택해 주세요.",
+        fields: [
+          {
+            type: "select",
+            name: "storedItemKey",
+            label: "보관할 아이템",
+            required: true,
+            options: candidates.map((candidate) => {
+              const displayItem = normalizeSystemInventoryItemForDisplay(candidate);
+              return {
+                value: buildInventoryItemKey(candidate),
+                label: displayItem.name || "아이템",
+              };
+            }),
+          },
+        ],
+      };
+    }
+    return null;
+  }
+
+  return {
+    fields: [
+      {
+        type: "select",
+        name: "targetFactionName",
+        label: "위장할 진영",
+        required: true,
+        options: PROFILE_FACTION_OPTIONS.map((value) => ({ value, label: value })),
+      },
+    ],
+  };
 }
 
 async function findProfileByCharacterName(characterName) {
@@ -3346,7 +3464,7 @@ function ensureMemberProfileEditModal() {
           <button id="member-profile-add-confirm" type="button" class="primary-button">닉네임 추가</button>
         </div>
         <label>
-          <span>친구 코드</span>
+          <span>작혼 친구 코드</span>
           <input type="text" name="friendCode" inputmode="numeric" pattern="[0-9]*" placeholder="숫자만 입력" />
         </label>
         <label>
@@ -3381,6 +3499,188 @@ function ensureMemberProfileEditModal() {
 
   document.body.append(modal);
   return modal;
+}
+
+function normalizeProfileDecorations(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const id = String(item.id || "").trim();
+      const spriteKey = String(item.spriteKey || "").trim();
+      if (!id || !spriteKey || !getItemSprite(spriteKey)) return null;
+      const rawX = Number(item.x);
+      const rawY = Number(item.y);
+      return {
+        id,
+        itemId: String(item.itemId || "").trim(),
+        name: String(item.name || "").trim(),
+        spriteKey,
+        colorPreset: String(item.colorPreset || "").trim(),
+        x: Number.isFinite(rawX) ? Math.min(1, Math.max(0, rawX)) : 0.5,
+        y: Number.isFinite(rawY) ? Math.min(1, Math.max(0, rawY)) : 0.5,
+        createdAt: String(item.createdAt || "").trim(),
+      };
+    })
+    .filter(Boolean);
+}
+
+function renderProfileDecorationVisual(item, isOwnProfile) {
+  const sprite = getItemSprite(item?.spriteKey);
+  if (!sprite) return "";
+  const safeLeft = Math.round(Math.min(1, Math.max(0, Number(item.x) || 0.5)) * 1000) / 10;
+  const safeTop = Math.round(Math.min(1, Math.max(0, Number(item.y) || 0.5)) * 1000) / 10;
+  const label = escapeHtml(item?.name || sprite.label || "프로필 장식");
+  return `
+    <div
+      class="profile-decoration-item${isOwnProfile ? " is-editable" : ""}"
+      data-profile-decoration-id="${escapeHtml(item.id)}"
+      data-profile-decoration-name="${label}"
+      style="left:${safeLeft}%;top:${safeTop}%;"
+      ${isOwnProfile ? "" : 'aria-hidden="true"'}
+    >
+      ${
+        isOwnProfile
+          ? `<button type="button" class="profile-decoration-remove" data-profile-decoration-remove="${escapeHtml(item.id)}" aria-label="${label} 장식을 인벤토리로 되돌리기">x</button>`
+          : ""
+      }
+      <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${label}" class="profile-decoration-image" loading="lazy"${buildItemImageStyleAttribute(item)} />
+    </div>
+  `;
+}
+
+function bindProfileDecorationEditor({ modal, profile, onProfilePatched, onToast }) {
+  const layer = modal.querySelector("[data-profile-decoration-layer]");
+  if (!(layer instanceof HTMLElement) || layer.dataset.profileDecorationEditable !== "true") {
+    return;
+  }
+
+  const nodes = Array.from(layer.querySelectorAll("[data-profile-decoration-id]"));
+  if (!nodes.length) return;
+
+  let activeState = null;
+
+  const applyPosition = (node, x, y) => {
+    node.style.left = `${Math.round(x * 1000) / 10}%`;
+    node.style.top = `${Math.round(y * 1000) / 10}%`;
+  };
+
+  const computePosition = (event, node) => {
+    const layerRect = layer.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    const halfWidth = Math.max(nodeRect.width / 2, 18);
+    const halfHeight = Math.max(nodeRect.height / 2, 18);
+    const clampedLeft = Math.min(layerRect.width - halfWidth, Math.max(halfWidth, event.clientX - layerRect.left));
+    const clampedTop = Math.min(layerRect.height - halfHeight, Math.max(halfHeight, event.clientY - layerRect.top));
+    return {
+      x: layerRect.width > 0 ? clampedLeft / layerRect.width : 0.5,
+      y: layerRect.height > 0 ? clampedTop / layerRect.height : 0.5,
+    };
+  };
+
+  const commitActiveDecoration = async () => {
+    if (!activeState) return;
+    const { decorationId, startX, startY, x, y, node } = activeState;
+    const moved = Math.abs(x - startX) > 0.001 || Math.abs(y - startY) > 0.001;
+    node.classList.remove("is-dragging");
+    if (!moved) {
+      activeState = null;
+      return;
+    }
+
+    const nextDecorations = normalizeProfileDecorations(profile.profileDecorations).map((item) =>
+      item.id === decorationId ? { ...item, x, y } : item
+    );
+
+    try {
+      const updatedProfile = await updateProfileDecorations(nextDecorations);
+      const mergedProfile = {
+        ...profile,
+        ...updatedProfile,
+        profileDecorations: normalizeProfileDecorations(updatedProfile.profileDecorations || nextDecorations),
+      };
+      profile.profileDecorations = mergedProfile.profileDecorations;
+      await onProfilePatched?.(mergedProfile);
+    } catch (error) {
+      applyPosition(node, startX, startY);
+      profile.profileDecorations = normalizeProfileDecorations(profile.profileDecorations).map((item) =>
+        item.id === decorationId ? { ...item, x: startX, y: startY } : item
+      );
+      onToast?.(error.message || "프로필 장식 위치를 저장하지 못했습니다.", true);
+    } finally {
+      activeState = null;
+    }
+  };
+
+  const handlePointerMove = (event) => {
+    if (!activeState) return;
+    event.preventDefault();
+    const { x, y } = computePosition(event, activeState.node);
+    activeState.x = x;
+    activeState.y = y;
+    applyPosition(activeState.node, x, y);
+  };
+
+  const handlePointerUp = async () => {
+    if (!activeState) return;
+    window.removeEventListener("pointermove", handlePointerMove);
+    window.removeEventListener("pointerup", handlePointerUp);
+    window.removeEventListener("pointercancel", handlePointerUp);
+    await commitActiveDecoration();
+  };
+
+  layer.querySelectorAll("[data-profile-decoration-remove]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const decorationId = button.dataset.profileDecorationRemove || "";
+      if (!decorationId) return;
+      try {
+        const result = await returnProfileDecorationToInventory(decorationId);
+        const updatedProfile = result?.profile || null;
+        if (updatedProfile) {
+          const mergedProfile = {
+            ...profile,
+            ...updatedProfile,
+            profileDecorations: normalizeProfileDecorations(updatedProfile.profileDecorations),
+          };
+          profile.profileDecorations = mergedProfile.profileDecorations;
+          button.closest("[data-profile-decoration-id]")?.remove();
+          await onProfilePatched?.(mergedProfile);
+        }
+        onToast?.("프로필 장식을 인벤토리로 되돌렸습니다.");
+      } catch (error) {
+        onToast?.(error.message || "프로필 장식을 되돌리지 못했습니다.", true);
+      }
+    });
+  });
+
+  nodes.forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    node.addEventListener("pointerdown", (event) => {
+      if (activeState) return;
+      if (event.target instanceof Element && event.target.closest("[data-profile-decoration-remove]")) {
+        return;
+      }
+      const decorationId = node.dataset.profileDecorationId || "";
+      if (!decorationId) return;
+      const currentDecoration = normalizeProfileDecorations(profile.profileDecorations).find((item) => item.id === decorationId);
+      if (!currentDecoration) return;
+      event.preventDefault();
+      node.classList.add("is-dragging");
+      node.setPointerCapture?.(event.pointerId);
+      activeState = {
+        decorationId,
+        node,
+        startX: currentDecoration.x,
+        startY: currentDecoration.y,
+        x: currentDecoration.x,
+        y: currentDecoration.y,
+      };
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp);
+      window.addEventListener("pointercancel", handlePointerUp);
+    });
+  });
 }
 
 function ensureInventoryUsePromptModal() {
@@ -3910,6 +4210,17 @@ function buildGroupedInventoryItems(items) {
       const existing = map.get(groupKey);
       if (existing) {
         existing.count += 1;
+        const currentItem = normalizeSystemInventoryItemForDisplay(existing.item);
+        const nextItem = normalizeSystemInventoryItemForDisplay(item);
+        const shouldPromote =
+          (!currentItem?.spriteKey && nextItem?.spriteKey) ||
+          (!currentItem?.colorPreset && nextItem?.colorPreset) ||
+          (!currentItem?.icon && nextItem?.icon) ||
+          (!currentItem?.shortLabel && nextItem?.shortLabel);
+        if (shouldPromote) {
+          existing.item = item;
+          existing.itemKey = buildInventoryItemKey(item);
+        }
         return map;
       }
       map.set(groupKey, { item, itemKey: buildInventoryItemKey(item), count: 1 });
@@ -3944,7 +4255,14 @@ function buildInventoryItemKey(item) {
 
 function buildInventoryGroupKey(item) {
   const displayItem = normalizeSystemInventoryItemForDisplay(item);
-  return [displayItem?.itemId || displayItem?.name || "item", displayItem?.name || "", displayItem?.description || ""].join("::");
+  const storedItem = displayItem?.storedItem && typeof displayItem.storedItem === "object" ? displayItem.storedItem : null;
+  return [
+    displayItem?.itemId || displayItem?.name || "item",
+    displayItem?.name || "",
+    displayItem?.description || "",
+    storedItem?.itemId || storedItem?.name || "",
+    storedItem?.grantedAt || "",
+  ].join("::");
 }
 
 function normalizeSystemItemName(name) {
@@ -3962,8 +4280,7 @@ function normalizeNonNegativeAmount(value) {
 function normalizeSystemInventoryItemForDisplay(item) {
   if (!item || typeof item !== "object") return item;
   const name = normalizeSystemItemName(item.name);
-  if (name === item.name) return item;
-  return {
+  const nextItem = name === item.name ? { ...item } : {
     ...item,
     name,
     shortLabel: name,
@@ -3972,6 +4289,82 @@ function normalizeSystemInventoryItemForDisplay(item) {
         ? "소포의 내용물을 숨겨서 보낼 때 사용하는 시스템 물품입니다."
         : "택배 상자로 온 소포를 거절할 때 사용하는 시스템 물품입니다.",
   };
+  if (name === "금고") {
+    const storedItem = item?.storedItem && typeof item.storedItem === "object"
+      ? normalizeSystemInventoryItemForDisplay(item.storedItem)
+      : null;
+    if (storedItem) {
+      nextItem.storedItem = storedItem;
+      nextItem.description = `${storedItem.name || "아이템"}이(가) 들어 있는 금고입니다. 사용하면 다시 꺼낼 수 있습니다.`;
+    } else {
+      delete nextItem.storedItem;
+      nextItem.description = "아이템 1개를 안전하게 보관할 수 있는 금고입니다. 사용하면 보관하거나 꺼낼 수 있습니다.";
+    }
+  }
+  return nextItem;
+}
+
+function buildInventoryTooltipText(item) {
+  const displayItem = normalizeSystemInventoryItemForDisplay(item);
+  const baseName = displayItem?.name || "이름 없는 아이템";
+  const baseDescription = displayItem?.description || "설명이 아직 등록되지 않았습니다.";
+  if (normalizeSystemItemName(displayItem?.name) === "금고") {
+    const storedItem = displayItem?.storedItem;
+    if (storedItem) {
+      return `${baseName} | 보관 중: ${storedItem.name || "아이템"} | ${baseDescription}`;
+    }
+  }
+  return `${baseName} | ${baseDescription}`;
+}
+
+function buildItemColorPresetButtons(selectedPreset = "") {
+  const selectedId = String(selectedPreset || "").trim();
+  return ITEM_COLOR_PRESETS.filter((preset) => !preset.hidden).map((preset) => {
+    const isActive = preset.id === selectedId;
+    const swatchStyle = preset.filter ? ` style="filter:${escapeHtml(preset.filter)}"` : "";
+    return `
+      <button
+        type="button"
+        class="item-color-preset-button${isActive ? " active" : ""}"
+        data-color-preset-button
+        data-color-preset="${escapeHtml(preset.id)}"
+        aria-pressed="${isActive ? "true" : "false"}"
+        title="${escapeHtml(preset.label)}"
+      >
+        <span class="item-color-preset-swatch"${swatchStyle} aria-hidden="true"></span>
+        <span class="item-color-preset-label">${escapeHtml(preset.label)}</span>
+      </button>
+    `;
+  }).join("");
+}
+
+function isFutureIsoTimestamp(value) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) && timestamp > Date.now();
+}
+
+function isPublicInventoryHidden(profile) {
+  return isFutureIsoTimestamp(profile?.publicInventoryHiddenUntil);
+}
+
+function getDisplayedProfileFactionName(profile, isOwnProfile) {
+  if (!isOwnProfile && isFutureIsoTimestamp(profile?.factionDisguiseUntil)) {
+    const disguisedFaction = String(profile?.factionDisguiseName || "").trim();
+    if (disguisedFaction) {
+      return disguisedFaction;
+    }
+  }
+  return String(profile?.factionName || "").trim();
+}
+
+function getDisplayedRankingFactionName(profileLike) {
+  if (isFutureIsoTimestamp(profileLike?.factionDisguiseUntil)) {
+    const disguisedFaction = String(profileLike?.factionDisguiseName || "").trim();
+    if (disguisedFaction) {
+      return disguisedFaction;
+    }
+  }
+  return String(profileLike?.factionName || "").trim();
 }
 
 function isSystemInventoryItem(item) {
@@ -3989,7 +4382,7 @@ function renderInventoryItemVisual(item, options = {}) {
 function renderProfileItemVisual(item) {
   const sprite = getItemSprite(item?.spriteKey);
   if (sprite) {
-    return `<img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="profile-item-icon profile-item-icon-image" loading="lazy" />`;
+    return `<img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="profile-item-icon profile-item-icon-image" loading="lazy"${buildItemImageStyleAttribute(item)} />`;
   }
   return `<span class="profile-item-icon">${escapeHtml(item?.icon || sprite?.fallbackIcon || "🎁")}</span>`;
 }
@@ -4145,6 +4538,10 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
   const categoryEditToggle = form.querySelector("[data-category-edit-toggle]");
   const categoryEditRow = form.querySelector("[data-category-edit-row]");
   const categoryOverrideSelect = form.elements.categoryOverride;
+  const foodRewardRow = form.querySelector("[data-food-reward-row]");
+  const foodRewardInput = form.elements.foodCurrencyReward;
+  const colorPresetInput = form.elements.colorPreset;
+  const colorPresetButtons = Array.from(form.querySelectorAll("[data-color-preset-button]"));
   const sellInShopCheckbox = form.elements.sellInShop;
   const priceRow = form.querySelector("[data-shop-price-row]");
   const priceInput = form.elements.price;
@@ -4177,11 +4574,46 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
     }
   };
 
+  const syncFoodRewardRow = () => {
+    const isFood = String(categoryInput?.value || "").trim() === "음식";
+    foodRewardRow?.classList.toggle("hidden", !isFood);
+    if (foodRewardInput) {
+      foodRewardInput.disabled = !isFood;
+      if (!isFood) {
+        foodRewardInput.value = "0";
+      }
+    }
+  };
+
+  const syncColorPresetPreview = () => {
+    const presetId = String(colorPresetInput?.value || "").trim();
+    const filter = getItemColorPresetFilter(presetId);
+    colorPresetButtons.forEach((button) => {
+      const isActive = String(button.dataset.colorPreset || "") === presetId;
+      button.classList.toggle("active", isActive);
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+
+    const selectedPreviewImage = picker?.querySelector(".sprite-picker-selected-image");
+    if (!selectedPreviewImage) return;
+    if (filter) {
+      selectedPreviewImage.style.filter = filter;
+      return;
+    }
+    selectedPreviewImage.style.removeProperty("filter");
+  };
+
   syncCategory();
   syncShopRow();
+  syncFoodRewardRow();
+  syncColorPresetPreview();
 
   if (form.dataset.metaBound !== "true") {
-    picker?.addEventListener("spritechange", syncCategory);
+    picker?.addEventListener("spritechange", () => {
+      syncCategory();
+      syncFoodRewardRow();
+      syncColorPresetPreview();
+    });
     categoryEditToggle?.addEventListener("click", () => {
       const isManual = form.dataset.categoryMode === "manual";
       form.dataset.categoryMode = isManual ? "auto" : "manual";
@@ -4193,8 +4625,20 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
         categoryEditToggle.textContent = isManual ? "카테고리 수정" : "자동 카테고리 사용";
       }
       syncCategory();
+      syncFoodRewardRow();
     });
-    categoryOverrideSelect?.addEventListener("change", syncCategory);
+    categoryOverrideSelect?.addEventListener("change", () => {
+      syncCategory();
+      syncFoodRewardRow();
+    });
+    colorPresetButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        if (colorPresetInput) {
+          colorPresetInput.value = String(button.dataset.colorPreset || "");
+        }
+        syncColorPresetPreview();
+      });
+    });
     sellInShopCheckbox?.addEventListener("change", syncShopRow);
     form.dataset.metaBound = "true";
   }
@@ -4207,6 +4651,8 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
     }
     syncCategory();
     syncShopRow();
+    syncFoodRewardRow();
+    syncColorPresetPreview();
   }
 }
 

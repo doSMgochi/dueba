@@ -3170,10 +3170,10 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EA_B3_B0_EB_8F_8C_EC_9D_B4",
         "label": "곰돌이",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/곰돌이.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/곰돌이.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 곰돌이 도트배포_리프트라시르/치장 아이템/곰돌이.png"
+        "searchText": "프로필 꾸미기 곰돌이 도트배포_리프트라시르/프로필 꾸미기/곰돌이.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EA_B5_AC_EB_91_90",
@@ -3194,10 +3194,10 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EA_B8_88_EB_82_98_EB_AD_87_EC_9E_8E",
         "label": "금나뭇잎",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/금나뭇잎.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/금나뭇잎.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 금나뭇잎 도트배포_리프트라시르/치장 아이템/금나뭇잎.png"
+        "searchText": "프로필 꾸미기 금나뭇잎 도트배포_리프트라시르/프로필 꾸미기/금나뭇잎.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_8A_91_EB_8C_80_EC_9D_B8_ED_98_95_ED_83_88",
@@ -3234,34 +3234,34 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_8B_AC1",
         "label": "달1",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/달1.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/달1.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 달1 도트배포_리프트라시르/치장 아이템/달1.png"
+        "searchText": "프로필 꾸미기 달1 도트배포_리프트라시르/프로필 꾸미기/달1.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_8B_AC2",
         "label": "달2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/달2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/달2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 달2 도트배포_리프트라시르/치장 아이템/달2.png"
+        "searchText": "프로필 꾸미기 달2 도트배포_리프트라시르/프로필 꾸미기/달2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_8B_AD_EB_8B_A4_EB_A6_AC",
         "label": "닭다리",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/닭다리.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/닭다리.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 닭다리 도트배포_리프트라시르/치장 아이템/닭다리.png"
+        "searchText": "프로필 꾸미기 닭다리 도트배포_리프트라시르/프로필 꾸미기/닭다리.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_8B_B4_EB_B0_B0",
         "label": "담배",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/담배.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/담배.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 담배 도트배포_리프트라시르/치장 아이템/담배.png"
+        "searchText": "프로필 꾸미기 담배 도트배포_리프트라시르/프로필 꾸미기/담배.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_8C_80_EB_A8_B8_EB_A6_AC_EA_B0_80_EB_B0_9C",
@@ -3282,34 +3282,34 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_9E_AD_ED_82_B9_1_EA_B8_88",
         "label": "랭킹_1금",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/랭킹_1금.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/랭킹_1금.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 랭킹_1금 도트배포_리프트라시르/치장 아이템/랭킹_1금.png"
+        "searchText": "프로필 꾸미기 랭킹_1금 도트배포_리프트라시르/프로필 꾸미기/랭킹_1금.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_9E_AD_ED_82_B9_2_EC_9D_80",
         "label": "랭킹_2은",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/랭킹_2은.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/랭킹_2은.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 랭킹_2은 도트배포_리프트라시르/치장 아이템/랭킹_2은.png"
+        "searchText": "프로필 꾸미기 랭킹_2은 도트배포_리프트라시르/프로필 꾸미기/랭킹_2은.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_9E_AD_ED_82_B9_3_EB_8F_99",
         "label": "랭킹_3동",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/랭킹_3동.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/랭킹_3동.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 랭킹_3동 도트배포_리프트라시르/치장 아이템/랭킹_3동.png"
+        "searchText": "프로필 꾸미기 랭킹_3동 도트배포_리프트라시르/프로필 꾸미기/랭킹_3동.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_A1_9C_EB_B4_87",
         "label": "로봇",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/로봇.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/로봇.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 로봇 도트배포_리프트라시르/치장 아이템/로봇.png"
+        "searchText": "프로필 꾸미기 로봇 도트배포_리프트라시르/프로필 꾸미기/로봇.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_A6_AC_EB_B3_B8_EB_85_B8_EB_9E_91",
@@ -3338,10 +3338,10 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_A6_AC_EB_B3_B8",
         "label": "리본",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/리본.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/리본.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 리본 도트배포_리프트라시르/치장 아이템/리본.png"
+        "searchText": "프로필 꾸미기 리본 도트배포_리프트라시르/프로필 꾸미기/리본.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_A6_BD_EC_8A_A4_ED_8B_B1",
@@ -3370,10 +3370,10 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_A7_A4_ED_99_94",
         "label": "매화",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/매화.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/매화.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 매화 도트배포_리프트라시르/치장 아이템/매화.png"
+        "searchText": "프로필 꾸미기 매화 도트배포_리프트라시르/프로필 꾸미기/매화.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_A9_94_EC_9D_B4_EB_93_9C_EB_B3_B5",
@@ -3426,18 +3426,18 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_B0_95_EC_A5_90",
         "label": "박쥐",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/박쥐.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/박쥐.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 박쥐 도트배포_리프트라시르/치장 아이템/박쥐.png"
+        "searchText": "프로필 꾸미기 박쥐 도트배포_리프트라시르/프로필 꾸미기/박쥐.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_B0_95_EC_A5_902",
         "label": "박쥐2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/박쥐2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/박쥐2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 박쥐2 도트배포_리프트라시르/치장 아이템/박쥐2.png"
+        "searchText": "프로필 꾸미기 박쥐2 도트배포_리프트라시르/프로필 꾸미기/박쥐2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_B0_98_EC_A7_80_EB_B3_B4_EC_84_9D",
@@ -3490,34 +3490,34 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_B3_841",
         "label": "별1",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/별1.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/별1.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 별1 도트배포_리프트라시르/치장 아이템/별1.png"
+        "searchText": "프로필 꾸미기 별1 도트배포_리프트라시르/프로필 꾸미기/별1.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_B3_842",
         "label": "별2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/별2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/별2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 별2 도트배포_리프트라시르/치장 아이템/별2.png"
+        "searchText": "프로필 꾸미기 별2 도트배포_리프트라시르/프로필 꾸미기/별2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_B3_B4_EA_B3_A0_EC_84_9C",
         "label": "보고서",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/보고서.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/보고서.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 보고서 도트배포_리프트라시르/치장 아이템/보고서.png"
+        "searchText": "프로필 꾸미기 보고서 도트배포_리프트라시르/프로필 꾸미기/보고서.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_B3_B4_EA_B3_A0_EC_84_9C2",
         "label": "보고서2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/보고서2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/보고서2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 보고서2 도트배포_리프트라시르/치장 아이템/보고서2.png"
+        "searchText": "프로필 꾸미기 보고서2 도트배포_리프트라시르/프로필 꾸미기/보고서2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EB_B3_B4_ED_83_80_EC_9D_B4",
@@ -3554,58 +3554,58 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_82_AC_ED_83_95",
         "label": "사탕",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/사탕.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/사탕.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 사탕 도트배포_리프트라시르/치장 아이템/사탕.png"
+        "searchText": "프로필 꾸미기 사탕 도트배포_리프트라시르/프로필 꾸미기/사탕.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_83_88_EC_8B_B9",
         "label": "새싹",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/새싹.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/새싹.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 새싹 도트배포_리프트라시르/치장 아이템/새싹.png"
+        "searchText": "프로필 꾸미기 새싹 도트배포_리프트라시르/프로필 꾸미기/새싹.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_83_88_EC_8B_B92",
         "label": "새싹2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/새싹2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/새싹2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 새싹2 도트배포_리프트라시르/치장 아이템/새싹2.png"
+        "searchText": "프로필 꾸미기 새싹2 도트배포_리프트라시르/프로필 꾸미기/새싹2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_83_9D_EC_84_A01",
         "label": "생선1",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/생선1.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/생선1.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 생선1 도트배포_리프트라시르/치장 아이템/생선1.png"
+        "searchText": "프로필 꾸미기 생선1 도트배포_리프트라시르/프로필 꾸미기/생선1.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_83_9D_EC_84_A02",
         "label": "생선2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/생선2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/생선2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 생선2 도트배포_리프트라시르/치장 아이템/생선2.png"
+        "searchText": "프로필 꾸미기 생선2 도트배포_리프트라시르/프로필 꾸미기/생선2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_83_9D_EC_84_A03",
         "label": "생선3",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/생선3.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/생선3.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 생선3 도트배포_리프트라시르/치장 아이템/생선3.png"
+        "searchText": "프로필 꾸미기 생선3 도트배포_리프트라시르/프로필 꾸미기/생선3.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_83_9D_EC_84_A04",
         "label": "생선4",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/생선4.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/생선4.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 생선4 도트배포_리프트라시르/치장 아이템/생선4.png"
+        "searchText": "프로필 꾸미기 생선4 도트배포_리프트라시르/프로필 꾸미기/생선4.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_84_9C_ED_81_90_EB_B2_84_EC_8A_A4",
@@ -3618,10 +3618,10 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_84_9D_EA_B6_81",
         "label": "석궁",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/석궁.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/석궁.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 석궁 도트배포_리프트라시르/치장 아이템/석궁.png"
+        "searchText": "프로필 꾸미기 석궁 도트배포_리프트라시르/프로필 꾸미기/석궁.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_84_B8_EC_9D_B4_EB_A0_8C_20_EC_9D_98_EC_83_81",
@@ -3690,50 +3690,50 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_97_B0_EA_BD_83",
         "label": "연꽃",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/연꽃.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/연꽃.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 연꽃 도트배포_리프트라시르/치장 아이템/연꽃.png"
+        "searchText": "프로필 꾸미기 연꽃 도트배포_리프트라시르/프로필 꾸미기/연꽃.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_97_B0_EA_BD_832",
         "label": "연꽃2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/연꽃2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/연꽃2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 연꽃2 도트배포_리프트라시르/치장 아이템/연꽃2.png"
+        "searchText": "프로필 꾸미기 연꽃2 도트배포_리프트라시르/프로필 꾸미기/연꽃2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_97_B4_EC_87_A0_1_EA_B8_88",
         "label": "열쇠_1금",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/열쇠_1금.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/열쇠_1금.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 열쇠_1금 도트배포_리프트라시르/치장 아이템/열쇠_1금.png"
+        "searchText": "프로필 꾸미기 열쇠_1금 도트배포_리프트라시르/프로필 꾸미기/열쇠_1금.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_97_B4_EC_87_A0_2_EC_9D_80",
         "label": "열쇠_2은",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/열쇠_2은.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/열쇠_2은.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 열쇠_2은 도트배포_리프트라시르/치장 아이템/열쇠_2은.png"
+        "searchText": "프로필 꾸미기 열쇠_2은 도트배포_리프트라시르/프로필 꾸미기/열쇠_2은.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_97_B4_EC_87_A0_3_EB_8F_99",
         "label": "열쇠_3동",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/열쇠_3동.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/열쇠_3동.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 열쇠_3동 도트배포_리프트라시르/치장 아이템/열쇠_3동.png"
+        "searchText": "프로필 꾸미기 열쇠_3동 도트배포_리프트라시르/프로필 꾸미기/열쇠_3동.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_98_A4_EB_A6_AC",
         "label": "오리",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/오리.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/오리.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 오리 도트배포_리프트라시르/치장 아이템/오리.png"
+        "searchText": "프로필 꾸미기 오리 도트배포_리프트라시르/프로필 꾸미기/오리.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_99_95_EA_B4_80",
@@ -3746,10 +3746,10 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_9C_A0_EB_A0_B9",
         "label": "유령",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/유령.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/유령.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 유령 도트배포_리프트라시르/치장 아이템/유령.png"
+        "searchText": "프로필 꾸미기 유령 도트배포_리프트라시르/프로필 꾸미기/유령.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_9C_A0_EB_A0_B9_EC_8B_A0_EB_B6_80_EC_9D_98_EC_83_81",
@@ -3762,26 +3762,26 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_9D_8C_ED_91_9C",
         "label": "음표",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/음표.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/음표.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 음표 도트배포_리프트라시르/치장 아이템/음표.png"
+        "searchText": "프로필 꾸미기 음표 도트배포_리프트라시르/프로필 꾸미기/음표.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_9E_89_ED_81_AC_EC_99_80_ED_8E_9C",
         "label": "잉크와펜",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/잉크와펜.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/잉크와펜.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 잉크와펜 도트배포_리프트라시르/치장 아이템/잉크와펜.png"
+        "searchText": "프로필 꾸미기 잉크와펜 도트배포_리프트라시르/프로필 꾸미기/잉크와펜.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_9E_89_ED_81_AC_EC_99_80_ED_8E_9C2",
         "label": "잉크와펜2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/잉크와펜2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/잉크와펜2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 잉크와펜2 도트배포_리프트라시르/치장 아이템/잉크와펜2.png"
+        "searchText": "프로필 꾸미기 잉크와펜2 도트배포_리프트라시르/프로필 꾸미기/잉크와펜2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_A0_95_EC_9E_A5",
@@ -3794,26 +3794,26 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_A2_85_EC_9D_B4_EB_B9_84_ED_96_89_EA_B8_B0_ED_8C_8C_EB_9E_91",
         "label": "종이비행기_파랑",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/종이비행기_파랑.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/종이비행기_파랑.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 종이비행기_파랑 도트배포_리프트라시르/치장 아이템/종이비행기_파랑.png"
+        "searchText": "프로필 꾸미기 종이비행기_파랑 도트배포_리프트라시르/프로필 꾸미기/종이비행기_파랑.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_A2_85_EC_9D_B4_EB_B9_84_ED_96_89_EA_B8_B0_ED_9D_B0_EC_83_89",
         "label": "종이비행기_흰색",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/종이비행기_흰색.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/종이비행기_흰색.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 종이비행기_흰색 도트배포_리프트라시르/치장 아이템/종이비행기_흰색.png"
+        "searchText": "프로필 꾸미기 종이비행기_흰색 도트배포_리프트라시르/프로필 꾸미기/종이비행기_흰색.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_A2_8B_EC_95_84_EC_9A_94",
         "label": "좋아요",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/좋아요.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/좋아요.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 좋아요 도트배포_리프트라시르/치장 아이템/좋아요.png"
+        "searchText": "프로필 꾸미기 좋아요 도트배포_리프트라시르/프로필 꾸미기/좋아요.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_B2_9C_EC_82_AC_EB_A7_81",
@@ -3826,10 +3826,10 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_B9_BC",
         "label": "칼",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/칼.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/칼.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 칼 도트배포_리프트라시르/치장 아이템/칼.png"
+        "searchText": "프로필 꾸미기 칼 도트배포_리프트라시르/프로필 꾸미기/칼.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__EC_BD_94_EC_A3_BC_EB_B6_80_EC_95_88_EA_B2_BD",
@@ -3866,90 +3866,90 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_8C_8C_EB_9E_91_EC_83_88",
         "label": "파랑새",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/파랑새.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/파랑새.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 파랑새 도트배포_리프트라시르/치장 아이템/파랑새.png"
+        "searchText": "프로필 꾸미기 파랑새 도트배포_리프트라시르/프로필 꾸미기/파랑새.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_8E_B8_EC_A7_80",
         "label": "편지",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/편지.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/편지.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 편지 도트배포_리프트라시르/치장 아이템/편지.png"
+        "searchText": "프로필 꾸미기 편지 도트배포_리프트라시르/프로필 꾸미기/편지.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_8E_B8_EC_A7_802",
         "label": "편지2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/편지2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/편지2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 편지2 도트배포_리프트라시르/치장 아이템/편지2.png"
+        "searchText": "프로필 꾸미기 편지2 도트배포_리프트라시르/프로필 꾸미기/편지2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_8F_AD_EC_A3_BD",
         "label": "폭죽",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/폭죽.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/폭죽.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 폭죽 도트배포_리프트라시르/치장 아이템/폭죽.png"
+        "searchText": "프로필 꾸미기 폭죽 도트배포_리프트라시르/프로필 꾸미기/폭죽.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_8F_AD_EC_A3_BD2",
         "label": "폭죽2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/폭죽2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/폭죽2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 폭죽2 도트배포_리프트라시르/치장 아이템/폭죽2.png"
+        "searchText": "프로필 꾸미기 폭죽2 도트배포_리프트라시르/프로필 꾸미기/폭죽2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_92_8D_EB_93_B1",
         "label": "풍등",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/풍등.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/풍등.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 풍등 도트배포_리프트라시르/치장 아이템/풍등.png"
+        "searchText": "프로필 꾸미기 풍등 도트배포_리프트라시르/프로필 꾸미기/풍등.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_92_8D_EB_93_B11",
         "label": "풍등1",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/풍등1.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/풍등1.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 풍등1 도트배포_리프트라시르/치장 아이템/풍등1.png"
+        "searchText": "프로필 꾸미기 풍등1 도트배포_리프트라시르/프로필 꾸미기/풍등1.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_92_8D_EB_93_B12",
         "label": "풍등2",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/풍등2.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/풍등2.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 풍등2 도트배포_리프트라시르/치장 아이템/풍등2.png"
+        "searchText": "프로필 꾸미기 풍등2 도트배포_리프트라시르/프로필 꾸미기/풍등2.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_92_8D_EB_93_B13",
         "label": "풍등3",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/풍등3.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/풍등3.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 풍등3 도트배포_리프트라시르/치장 아이템/풍등3.png"
+        "searchText": "프로필 꾸미기 풍등3 도트배포_리프트라시르/프로필 꾸미기/풍등3.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_92_8D_EB_93_B14",
         "label": "풍등4",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/풍등4.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/풍등4.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 풍등4 도트배포_리프트라시르/치장 아이템/풍등4.png"
+        "searchText": "프로필 꾸미기 풍등4 도트배포_리프트라시르/프로필 꾸미기/풍등4.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_95_98_EC_96_80_EA_BD_83",
         "label": "하얀꽃",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/하얀꽃.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/하얀꽃.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 하얀꽃 도트배포_리프트라시르/치장 아이템/하얀꽃.png"
+        "searchText": "프로필 꾸미기 하얀꽃 도트배포_리프트라시르/프로필 꾸미기/하얀꽃.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_95_98_ED_8A_B8_EC_95_88_EA_B2_BD",
@@ -4002,26 +4002,26 @@
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_9B_88_EB_A0_A8_EA_B2_80_EA_B3_BC_EB_B0_A9_ED_8C_A8",
         "label": "훈련_검과방패",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/훈련_검과방패.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/훈련_검과방패.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 훈련_검과방패 도트배포_리프트라시르/치장 아이템/훈련_검과방패.png"
+        "searchText": "프로필 꾸미기 훈련_검과방패 도트배포_리프트라시르/프로필 꾸미기/훈련_검과방패.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_9B_88_EB_A0_A8_EA_B8_B0_EC_82_AC_EB_B0_A9_ED_8C_A8",
         "label": "훈련_기사방패",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/훈련_기사방패.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/훈련_기사방패.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 훈련_기사방패 도트배포_리프트라시르/치장 아이템/훈련_기사방패.png"
+        "searchText": "프로필 꾸미기 훈련_기사방패 도트배포_리프트라시르/프로필 꾸미기/훈련_기사방패.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_9B_88_EB_A0_A8_EC_9A_A9_EB_B3_91_EB_B0_A9_ED_8C_A8",
         "label": "훈련_용병방패",
-        "category": "치장 아이템",
-        "path": "/assets/item-dots/도트배포_리프트라시르/치장 아이템/훈련_용병방패.png",
+        "category": "프로필 꾸미기",
+        "path": "/assets/item-dots/도트배포_리프트라시르/프로필 꾸미기/훈련_용병방패.png",
         "fallbackIcon": "🎁",
-        "searchText": "치장 아이템 훈련_용병방패 도트배포_리프트라시르/치장 아이템/훈련_용병방패.png"
+        "searchText": "프로필 꾸미기 훈련_용병방패 도트배포_리프트라시르/프로필 꾸미기/훈련_용병방패.png"
     },
     {
         "key": "EB_8F_84_ED_8A_B8_EB_B0_B0_ED_8F_AC_EB_A6_AC_ED_94_84_ED_8A_B8_EB_9D_BC_EC_8B_9C_EB_A5_B4__EC_B9_98_EC_9E_A5_20_EC_95_84_EC_9D_B4_ED_85_9C__ED_9D_B0_20_EB_93_9C_EB_A0_88_EC_8A_A4",
@@ -4175,8 +4175,27 @@ itemSpriteCatalog.forEach((item) => {
   });
 });
 const spriteLabelMap = new Map(itemSpriteCatalog.map((item) => [String(item.label || "").trim(), item]));
+export const ITEM_COLOR_PRESETS = [
+  { id: "", label: "기본", filter: "" },
+  { id: "crimson", label: "크림슨", filter: "hue-rotate(-18deg) saturate(1.55) brightness(1.02) contrast(1.04)" },
+  { id: "pink", label: "분홍빛", filter: "hue-rotate(-46deg) saturate(1.42) brightness(1.1) contrast(1.01)" },
+  { id: "rose-gold", label: "장미금", filter: "hue-rotate(-34deg) saturate(1.2) brightness(1.1) contrast(1.02) sepia(0.14)" },
+  { id: "orange", label: "주황빛", filter: "hue-rotate(-24deg) saturate(1.58) brightness(1.08) contrast(1.03) sepia(0.18)" },
+  { id: "yellow", label: "황금빛", filter: "hue-rotate(-62deg) saturate(1.56) brightness(1.14) contrast(1.01) sepia(0.24)" },
+  { id: "blue-neon", label: "청색 네온", filter: "hue-rotate(138deg) saturate(1.45) brightness(1.04) contrast(1.04)" },
+  { id: "sky", label: "하늘빛", filter: "hue-rotate(112deg) saturate(1.22) brightness(1.12) contrast(1.01)" },
+  { id: "teal", label: "청록", filter: "hue-rotate(92deg) saturate(1.36) brightness(1.02) contrast(1.05)" },
+  { id: "emerald", label: "에메랄드", filter: "hue-rotate(66deg) saturate(1.5) brightness(1.03) contrast(1.08)" },
+  { id: "violet", label: "암시장 보라", filter: "hue-rotate(208deg) saturate(1.28) brightness(1.01) contrast(1.06)" },
+  { id: "lavender", label: "라벤더", filter: "hue-rotate(228deg) saturate(1.12) brightness(1.1) contrast(1.01)" },
+  { id: "faded", label: "퇴색", filter: "saturate(0.48) brightness(0.97) contrast(0.94)" },
+  { id: "black", label: "먹빛", filter: "grayscale(1) brightness(0.44) contrast(1.18)" },
+  { id: "white", label: "백자빛", filter: "grayscale(1) brightness(1.72) contrast(0.9)" },
+  { id: "mono", label: "흑백", filter: "grayscale(1) contrast(1.08) brightness(1.02)", hidden: true },
+];
+const itemColorPresetMap = new Map(ITEM_COLOR_PRESETS.map((preset) => [preset.id, preset]));
 const removedSpriteCategories = new Set(["스킬", "클래스", "스킬,클래스"]);
-const primaryItemCategories = ["소모품", "기타 아이템", "치장 아이템", "음식", "생물", "화폐"];
+const primaryItemCategories = ["소모품", "기타 아이템", "치장 아이템", "프로필 꾸미기", "음식", "생물", "화폐"];
 const categoryAliasMap = new Map([
   ["권한", "소모품"],
   ["광물", "화폐"],
@@ -4193,6 +4212,7 @@ const categoryAliasMap = new Map([
   ["시즈널 이벤트", "기타 아이템"],
   ["악세서리", "치장 아이템"],
   ["의상", "치장 아이템"],
+  ["프로필 꾸미기", "프로필 꾸미기"],
   ["음식", "음식"],
   ["화폐", "화폐"],
 ]);
@@ -4290,12 +4310,27 @@ export function renderItemVisual(item, { large = false, extraClass = "", overlay
   const sprite = getItemSprite(item?.spriteKey) || findItemSpriteByLabel(item?.name) || findItemSpriteByLabel(item?.shortLabel);
   const fallbackIcon = escapeHtml(item?.icon || sprite?.fallbackIcon || "🎁");
   const className = ["dot-slot", large ? "large" : "", sprite ? "has-image" : "", extraClass].filter(Boolean).join(" ");
+  const imageStyle = buildItemImageStyleAttribute(item);
 
   if (sprite) {
-    return `<div class="${className}"><img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="dot-slot-image" loading="lazy" />${overlayHtml}</div>`;
+    return `<div class="${className}"><img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="dot-slot-image" loading="lazy"${imageStyle} />${overlayHtml}</div>`;
   }
 
   return `<div class="${className}"><span class="dot-slot-fallback">${fallbackIcon}</span>${overlayHtml}</div>`;
+}
+
+export function normalizeItemColorPreset(presetId) {
+  const normalizedId = String(presetId || "").trim();
+  return itemColorPresetMap.has(normalizedId) ? normalizedId : "";
+}
+
+export function getItemColorPresetFilter(presetId) {
+  return itemColorPresetMap.get(normalizeItemColorPreset(presetId))?.filter || "";
+}
+
+export function buildItemImageStyleAttribute(item) {
+  const filter = getItemColorPresetFilter(item?.colorPreset);
+  return filter ? ` style="filter:${escapeHtml(filter)}"` : "";
 }
 
 export function getItemSpriteUrl(spriteOrPath) {

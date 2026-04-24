@@ -98,6 +98,7 @@ let yachtScoreFeedback = null;
 let yachtEmoteCooldownUntilMs = 0;
 let yachtEmotePanelOpen = false;
 let yachtActionUnauthorized = false;
+let previousActiveRoomSnapshot = null;
 
 let yachtState = {
   profile: null,
@@ -118,6 +119,38 @@ function readYachtSfxSettings() {
   } catch {
     return { enabled: true, volume: 0.65 };
   }
+}
+
+function isYachtSfxAudible(settings = readYachtSfxSettings()) {
+  return settings.enabled !== false && Number(settings.volume || 0) > 0.001;
+}
+
+function stopAllYachtSfx() {
+  yachtSfxLooping.forEach((audio) => {
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch {
+      // noop
+    }
+  });
+  yachtSfxLooping.clear();
+  yachtSfxAudio.forEach((audio) => {
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch {
+      // noop
+    }
+  });
+}
+
+function canUseLocalVisualDiceState(room) {
+  const liveRoom =
+    yachtState.room && String(yachtState.room.id || "") === String(room?.id || "") ? yachtState.room : room;
+  const viewerUid = String(yachtState.profile?.uid || "");
+  const currentTurnUid = String(getCurrentTurnPlayer(liveRoom)?.uid || "");
+  return Boolean(viewerUid) && viewerUid === currentTurnUid;
 }
 
 function writeYachtSfxSettings(nextSettings) {
@@ -175,12 +208,13 @@ function unlockYachtAudio() {
 
 function playYachtSfx(key, options = {}) {
   const settings = readYachtSfxSettings();
-  if (!settings.enabled) return null;
+  if (!isYachtSfxAudible(settings)) return null;
   const audio = getYachtSfxAudio(key);
   if (!audio) return null;
   audio.loop = Boolean(options.loop ?? YACHT_SFX[key]?.loop);
   applyYachtSfxVolume(audio, key, Number(options.volume ?? 1));
   try {
+    audio.pause();
     audio.currentTime = 0;
   } catch {
     // Some browsers disallow seeking before metadata is loaded.
@@ -191,7 +225,7 @@ function playYachtSfx(key, options = {}) {
 
 function startYachtSfxLoop(key) {
   const settings = readYachtSfxSettings();
-  if (!settings.enabled || !yachtSfxUnlocked) return;
+  if (!isYachtSfxAudible(settings) || !yachtSfxUnlocked) return;
   if (yachtSfxLooping.has(key)) return;
   const audio = playYachtSfx(key, { loop: true });
   if (audio) yachtSfxLooping.set(key, audio);
@@ -301,12 +335,12 @@ export function cleanupYachtModule() {
   activeRoomUnsubscribe = null;
   automationIntervalId = 0;
   automationWakeTimeoutId = 0;
+  previousActiveRoomSnapshot = null;
   boardViewCleanup = null;
   lifecycleResumeCleanup = null;
   boardPoseCache.clear();
   boardVisualDiceCache.clear();
-  yachtSfxLooping.forEach((audio) => audio.pause());
-  yachtSfxLooping.clear();
+  stopAllYachtSfx();
   boardVisualSyncKey = "";
   boardVisualSyncPromise = null;
   boardViewSignature = "";
@@ -370,14 +404,17 @@ function subscribeRoomList() {
 
 function subscribeActiveRoom(roomId) {
   if (!roomId) {
+    previousActiveRoomSnapshot = null;
     yachtState.room = null;
     renderYachtRoot();
     return;
   }
 
+  previousActiveRoomSnapshot = null;
   activeRoomUnsubscribe = onSnapshot(doc(db, "yacht-rooms", roomId), async (snapshot) => {
     if (!snapshot.exists()) {
       yachtState.onToast?.forceHide?.();
+      previousActiveRoomSnapshot = null;
       yachtState.room = null;
       yachtState.roomId = "";
       await clearActiveRoom();
@@ -386,7 +423,11 @@ function subscribeActiveRoom(roomId) {
       return;
     }
 
-    yachtState.room = { id: snapshot.id, ...snapshot.data() };
+    const nextRoom = { id: snapshot.id, ...snapshot.data() };
+    applyRoomAudioFeedback(previousActiveRoomSnapshot, nextRoom);
+    applyRoomScoreFeedback(previousActiveRoomSnapshot, nextRoom);
+    previousActiveRoomSnapshot = nextRoom;
+    yachtState.room = nextRoom;
     renderYachtRoot();
     updateVisibleTimers();
     void maybeAdvanceByTimeout();
@@ -787,9 +828,8 @@ function bindYachtRoomTools(room) {
         toggle.setAttribute("aria-label", next.enabled ? "효과음 끄기" : "효과음 켜기");
         toggle.setAttribute("title", next.enabled ? "효과음 켜짐" : "효과음 꺼짐");
       });
-      if (!next.enabled) {
-        yachtSfxLooping.forEach((audio) => audio.pause());
-        yachtSfxLooping.clear();
+      if (!isYachtSfxAudible(next)) {
+        stopAllYachtSfx();
       } else {
         playYachtSfx("roll", { volume: 0.18 });
       }
@@ -805,7 +845,11 @@ function bindYachtRoomTools(room) {
         if (volumeInput !== input) volumeInput.value = String(Math.round(settings.volume * 100));
       });
       yachtSfxAudio.forEach((audio, key) => applyYachtSfxVolume(audio, key));
-      if (settings.enabled) unlockYachtAudio();
+      if (!isYachtSfxAudible(settings)) {
+        stopAllYachtSfx();
+      } else if (settings.enabled) {
+        unlockYachtAudio();
+      }
     });
   });
 
@@ -929,10 +973,7 @@ function bindPlayingRoomEvents(room) {
       unlockYachtAudio();
       const next = writeYachtSfxSettings({ enabled: !readYachtSfxSettings().enabled });
       sfxToggle.textContent = `효과음 ${next.enabled ? "ON" : "OFF"}`;
-      if (!next.enabled) {
-        yachtSfxLooping.forEach((audio) => audio.pause());
-        yachtSfxLooping.clear();
-      }
+      if (!isYachtSfxAudible(next)) stopAllYachtSfx();
     });
   }
 
@@ -942,7 +983,11 @@ function bindPlayingRoomEvents(room) {
     sfxVolume.addEventListener("input", () => {
       const settings = writeYachtSfxSettings({ volume: Number(sfxVolume.value || 0) / 100 });
       yachtSfxAudio.forEach((audio, key) => applyYachtSfxVolume(audio, key));
-      if (settings.enabled) unlockYachtAudio();
+      if (!isYachtSfxAudible(settings)) {
+        stopAllYachtSfx();
+      } else if (settings.enabled) {
+        unlockYachtAudio();
+      }
     });
   }
 
@@ -1394,7 +1439,11 @@ function getDisplayedDiceValues(room) {
   const roomKey = String(room?.id || "");
   const diceSeed = Number(room?.diceSeed || 0);
   const localVisualState = boardVisualDiceCache.get(roomKey);
-  if (localVisualState?.diceSeed === diceSeed && Array.isArray(localVisualState.values)) {
+  if (
+    canUseLocalVisualDiceState(room) &&
+    localVisualState?.diceSeed === diceSeed &&
+    Array.isArray(localVisualState.values)
+  ) {
     return normalizeDice(localVisualState.values);
   }
   const sharedVisualState = getSharedVisualDiceState(room);
@@ -1415,6 +1464,66 @@ function getSharedDiceMotion(room) {
   if (Number(room.diceMotion.diceSeed || 0) !== Number(room.diceSeed || 0)) return null;
   if (!Array.isArray(room.diceMotion.dice)) return null;
   return room.diceMotion;
+}
+
+function applyRoomScoreFeedback(previousRoom, nextRoom) {
+  if (!previousRoom || !nextRoom) return;
+  if (String(previousRoom.id || "") !== String(nextRoom.id || "")) return;
+  if (String(nextRoom.status || "") !== ROOM_STATUS_PLAYING) return;
+
+  const previousPlayers = Array.isArray(previousRoom.players) ? previousRoom.players : [];
+  const nextPlayers = Array.isArray(nextRoom.players) ? nextRoom.players : [];
+  for (const nextPlayer of nextPlayers) {
+    const previousPlayer = previousPlayers.find(
+      (player) => String(player.uid || "") === String(nextPlayer.uid || "")
+    );
+    for (const rowId of PLAYABLE_CATEGORY_IDS) {
+      const wasLocked = Boolean(previousPlayer?.scoreSheet?.[rowId]?.locked);
+      const isLocked = Boolean(nextPlayer?.scoreSheet?.[rowId]?.locked);
+      if (!wasLocked && isLocked) {
+        const feedback = {
+          roomId: nextRoom.id,
+          playerUid: nextPlayer.uid,
+          categoryId: rowId,
+          score: Number(nextPlayer.scoreSheet?.[rowId]?.score || 0),
+          at: Date.now(),
+        };
+        const currentKey = yachtScoreFeedback
+          ? `${yachtScoreFeedback.roomId}:${yachtScoreFeedback.playerUid}:${yachtScoreFeedback.categoryId}:${yachtScoreFeedback.score}`
+          : "";
+        const nextKey = `${feedback.roomId}:${feedback.playerUid}:${feedback.categoryId}:${feedback.score}`;
+        if (currentKey !== nextKey || Date.now() - Number(yachtScoreFeedback?.at || 0) > 1200) {
+          yachtScoreFeedback = feedback;
+          showYachtScoreFeedback(feedback.categoryId, feedback.score);
+          if (rowId === "yacht") {
+            const boardEl = document.querySelector("[data-yacht-physics-board]");
+            showYachtCelebration(boardEl, nextRoom.id, Number(nextRoom.diceSeed || 0));
+          }
+        }
+        return;
+      }
+    }
+  }
+}
+
+function applyRoomAudioFeedback(previousRoom, nextRoom) {
+  if (!previousRoom || !nextRoom) return;
+  if (String(previousRoom.id || "") !== String(nextRoom.id || "")) return;
+  if (String(nextRoom.status || "") !== ROOM_STATUS_PLAYING) return;
+  if (!isYachtSfxAudible()) return;
+
+  const previousPhase = String(previousRoom.actionPhase || "");
+  const nextPhase = String(nextRoom.actionPhase || "");
+  const previousSeed = Number(previousRoom.diceSeed || 0);
+  const nextSeed = Number(nextRoom.diceSeed || 0);
+  const nextTurnUid = String(getCurrentTurnPlayer(nextRoom)?.uid || "");
+  const viewerUid = String(yachtState.profile?.uid || "");
+
+  if (nextPhase === PHASE_ROLLING && (previousPhase !== PHASE_ROLLING || previousSeed !== nextSeed)) {
+    if (nextTurnUid && nextTurnUid !== viewerUid) {
+      playYachtSfx("roll");
+    }
+  }
 }
 
 function buildLocalVisualDiceStatePayload(room) {
@@ -1851,6 +1960,7 @@ function createBoardEngine(THREE, CANNON, RoundedBox) {
   }
 
   function playSoftCollision(intensity = 0.1) {
+    if (!isYachtSfxAudible()) return;
     const context = getAudioContext();
     if (!context) return;
     if (context.state === "suspended") {
@@ -2153,7 +2263,9 @@ function mount(container, room) {
     const cachedPoseState = boardPoseCache.get(poseCacheKey) || {};
     const cacheAgeMs = Math.max(0, Date.now() - Number(cachedPoseState.updatedAtMs || 0));
     const localCachedPoses =
-      Number(cachedPoseState.diceSeed || 0) === seedBase && cacheAgeMs < 12000
+      canUseLocalVisualDiceState(room) &&
+      Number(cachedPoseState.diceSeed || 0) === seedBase &&
+      cacheAgeMs < 12000
         ? cachedPoseState.poses || {}
         : {};
     const cachedPoses = {
@@ -3404,6 +3516,7 @@ async function clearActiveRoom() {
   yachtState.onToast?.forceHide?.();
   yachtState.roomId = "";
   yachtState.room = null;
+  previousActiveRoomSnapshot = null;
   if (typeof activeRoomUnsubscribe === "function") {
     activeRoomUnsubscribe();
     activeRoomUnsubscribe = null;

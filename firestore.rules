@@ -24,6 +24,7 @@ service cloud.firestore {
           "dismissedAnnouncementIds",
           "updatedAt",
           "profileSealImage",
+          "profileDecorations",
           "extraNicknames",
           "nickname",
           "friendCode",

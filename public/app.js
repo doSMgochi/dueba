@@ -53,6 +53,7 @@ bindModal(resetPasswordModal, openResetPasswordModalButton, closeResetPasswordMo
 
 signupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const submitButton = signupForm.querySelector('button[type="submit"]');
   const payload = Object.fromEntries(new FormData(signupForm).entries());
 
   if (String(payload.password || "") !== String(payload.passwordConfirm || "")) {
@@ -61,6 +62,7 @@ signupForm.addEventListener("submit", async (event) => {
   }
 
   try {
+    if (submitButton) submitButton.disabled = true;
     showToast("처리중입니다.");
     await signUpWithProfile({
       loginId: payload.loginId,
@@ -77,7 +79,6 @@ signupForm.addEventListener("submit", async (event) => {
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    delete loginForm.dataset.pending;
     if (submitButton) submitButton.disabled = false;
   }
 });
@@ -100,9 +101,11 @@ findIdForm.addEventListener("submit", async (event) => {
 
 resetPasswordForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const submitButton = resetPasswordForm.querySelector('button[type="submit"]');
   const payload = Object.fromEntries(new FormData(resetPasswordForm).entries());
 
   try {
+    if (submitButton) submitButton.disabled = true;
     showToast("처리중입니다.");
     await requestPasswordResetEmail(payload.email);
     resetPasswordForm.reset();
@@ -111,7 +114,6 @@ resetPasswordForm.addEventListener("submit", async (event) => {
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    delete loginForm.dataset.pending;
     if (submitButton) submitButton.disabled = false;
   }
 });
@@ -143,6 +145,9 @@ loginForm.addEventListener("submit", async (event) => {
     showToast("로그인되었습니다.");
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    delete loginForm.dataset.pending;
+    if (submitButton) submitButton.disabled = false;
   }
 });
 

@@ -18,6 +18,7 @@ import {
   limit,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -41,12 +42,14 @@ const purchaseShopItemCallable = httpsCallable(functions, "purchaseShopItem");
 const sendParcelCallable = httpsCallable(functions, "sendParcel");
 const respondParcelCallable = httpsCallable(functions, "respondParcel");
 const useInventoryItemCallable = httpsCallable(functions, "useInventoryItem");
+const returnProfileDecorationToInventoryCallable = httpsCallable(functions, "returnProfileDecorationToInventory");
 const listAdminLogsCallable = httpsCallable(functions, "listAdminLogs");
 const listBugReportsCallable = httpsCallable(functions, "listBugReports");
 const claimActiveSessionCallable = httpsCallable(functions, "claimActiveSession");
 const allowedFactions = ["매화", "난초", "국화", "대나무"];
 const ACTIVE_SESSION_STORAGE_KEY = "mahjong-admin-active-session-id";
 let activeSessionUnsubscribe = null;
+let currentProfileUnsubscribe = null;
 let isSigningOutForSessionConflict = false;
 let pendingAuthSignOutReason = "";
 
@@ -100,6 +103,10 @@ function buildDefaultProfile({ uid, loginId, email, nickname, characterName, fri
     availableTraitPoints: 12,
     dismissedAnnouncementIds: [],
     inventory: [],
+    profileDecorations: [],
+    publicInventoryHiddenUntil: "",
+    factionDisguiseUntil: "",
+    factionDisguiseName: "",
     currency: 300,
     updatedAt: serverTimestamp(),
     createdAt: serverTimestamp(),
@@ -166,6 +173,13 @@ function clearActiveSessionWatcher() {
     activeSessionUnsubscribe();
   }
   activeSessionUnsubscribe = null;
+}
+
+function clearCurrentProfileWatcher() {
+  if (typeof currentProfileUnsubscribe === "function") {
+    currentProfileUnsubscribe();
+  }
+  currentProfileUnsubscribe = null;
 }
 
 export function consumeAuthSignOutReason() {
@@ -392,6 +406,7 @@ export async function requestPasswordResetEmail(email) {
 
 export async function logoutUser() {
   clearActiveSessionWatcher();
+  clearCurrentProfileWatcher();
   await signOut(auth);
 }
 
@@ -415,6 +430,7 @@ export function onSignedInUserChanged(callback) {
   return onAuthStateChanged(auth, async (user) => {
     if (!user) {
       clearActiveSessionWatcher();
+      clearCurrentProfileWatcher();
       callback(null, { reason: consumeAuthSignOutReason() });
       return;
     }
@@ -423,9 +439,20 @@ export function onSignedInUserChanged(callback) {
       const claimedProfile = await claimCurrentSession();
       const profile = claimedProfile || (await refreshCurrentUserProfile());
       watchActiveSession(profile);
+      clearCurrentProfileWatcher();
+      if (profile?.docId) {
+        currentProfileUnsubscribe = onSnapshot(doc(db, "users", profile.docId), (snapshot) => {
+          if (!snapshot.exists()) return;
+          callback({
+            docId: snapshot.id,
+            ...snapshot.data(),
+          });
+        });
+      }
       callback(profile);
     } catch (error) {
       console.error(error);
+      clearCurrentProfileWatcher();
       callback(null);
     }
   });
@@ -479,6 +506,8 @@ export async function getRankingBoard() {
           rankingPoints: Number(data.rankingPoints || 0),
           currency: Number(data.currency || 0),
           factionName: String(data.factionName || "").trim(),
+          factionDisguiseName: String(data.factionDisguiseName || "").trim(),
+          factionDisguiseUntil: String(data.factionDisguiseUntil || "").trim(),
           inventoryTypeCount: Array.from(
             new Set(
               (Array.isArray(data.inventory) ? data.inventory : [])
@@ -624,6 +653,55 @@ export async function updateProfileSealImage(profileSealImage) {
   }
 }
 
+export async function updateProfileDecorations(profileDecorations) {
+  try {
+    if (!auth.currentUser) {
+      throw new Error("로그인한 유저가 없습니다.");
+    }
+
+    const profile = await findUserProfileByUid(auth.currentUser.uid);
+    if (!profile) {
+      throw new Error("유저 프로필을 찾지 못했습니다.");
+    }
+
+    const normalizedDecorations = Array.isArray(profileDecorations)
+      ? profileDecorations
+          .map((item) => {
+            if (!item || typeof item !== "object") return null;
+            const id = String(item.id || "").trim();
+            const spriteKey = String(item.spriteKey || "").trim();
+            if (!id || !spriteKey) return null;
+            const rawX = Number(item.x);
+            const rawY = Number(item.y);
+            return {
+              id,
+              itemId: String(item.itemId || "").trim(),
+              name: String(item.name || "").trim(),
+              spriteKey,
+              colorPreset: String(item.colorPreset || "").trim(),
+              x: Number.isFinite(rawX) ? Math.min(1, Math.max(0, rawX)) : 0.5,
+              y: Number.isFinite(rawY) ? Math.min(1, Math.max(0, rawY)) : 0.5,
+              createdAt: String(item.createdAt || "").trim(),
+            };
+          })
+          .filter(Boolean)
+      : [];
+
+    await updateDoc(doc(db, "users", profile.id), {
+      profileDecorations: normalizedDecorations,
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      docId: profile.id,
+      ...profile.data,
+      profileDecorations: normalizedDecorations,
+    };
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
 export async function updateMemberProfile({
   nickname = "",
   extraNicknames = [],
@@ -729,6 +807,88 @@ export async function useInventoryItem(itemKey, extraData = {}) {
   try {
     const result = await useInventoryItemCallable({ itemKey, extraData });
     return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function returnProfileDecorationToInventory(decorationId) {
+  try {
+    try {
+      const result = await returnProfileDecorationToInventoryCallable({ decorationId });
+      return result.data;
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (!message.includes("404")) {
+        throw error;
+      }
+    }
+
+    if (!auth.currentUser) {
+      throw new Error("로그인한 유저가 없습니다.");
+    }
+
+    const profile = await findUserProfileByUid(auth.currentUser.uid);
+    if (!profile) {
+      throw new Error("유저 프로필을 찾지 못했습니다.");
+    }
+
+    const normalizedDecorationId = String(decorationId || "").trim();
+    if (!normalizedDecorationId) {
+      throw new Error("프로필 장식 ID가 없습니다.");
+    }
+
+    const profileRef = doc(db, "users", profile.id);
+    let nextProfileForReturn = null;
+    await runTransaction(db, async (transaction) => {
+      const profileSnapshot = await transaction.get(profileRef);
+      if (!profileSnapshot.exists()) {
+        throw new Error("유저 프로필을 찾지 못했습니다.");
+      }
+
+      const profileData = profileSnapshot.data();
+      const decorations = Array.isArray(profileData.profileDecorations) ? [...profileData.profileDecorations] : [];
+      const decorationIndex = decorations.findIndex((item) => String(item?.id || "").trim() === normalizedDecorationId);
+      if (decorationIndex === -1) {
+        throw new Error("프로필 장식을 찾지 못했습니다.");
+      }
+
+      const decoration = decorations.splice(decorationIndex, 1)[0];
+      const itemDefinitionRef =
+        decoration?.itemId ? doc(db, "item-db", String(decoration.itemId || "").trim()) : null;
+      const itemDefinitionSnapshot = itemDefinitionRef ? await transaction.get(itemDefinitionRef) : null;
+      const itemDefinition = itemDefinitionSnapshot?.exists() ? itemDefinitionSnapshot.data() : null;
+      const inventory = Array.isArray(profileData.inventory) ? [...profileData.inventory] : [];
+      inventory.push({
+        itemId: String(decoration?.itemId || "").trim(),
+        name: String(itemDefinition?.name || decoration?.name || "프로필 장식").trim(),
+        description: String(itemDefinition?.description || "").trim(),
+        shortLabel: String(itemDefinition?.shortLabel || itemDefinition?.name || decoration?.name || "프로필 장식").trim(),
+        icon: String(itemDefinition?.icon || "🎁").trim(),
+        spriteKey: String(itemDefinition?.spriteKey || decoration?.spriteKey || "").trim(),
+        colorPreset: String(itemDefinition?.colorPreset || decoration?.colorPreset || "").trim(),
+        category: String(itemDefinition?.category || "프로필 꾸미기").trim(),
+        grantedAt: new Date().toISOString(),
+      });
+
+      transaction.update(profileRef, {
+        inventory,
+        profileDecorations: decorations,
+        updatedAt: serverTimestamp(),
+      });
+
+      nextProfileForReturn = {
+        docId: profile.id,
+        ...profileData,
+        inventory,
+        profileDecorations: decorations,
+      };
+    });
+
+    return {
+      ok: true,
+      profile: nextProfileForReturn,
+    };
   } catch (error) {
     throw toFriendlyError(error);
   }
