@@ -54,7 +54,7 @@ import {
   updateProfileSealImage,
 } from "./auth.js";
 
-const SYSTEM_INVENTORY_ITEM_NAMES = new Set(["망치", "택배 상자", "택배상자", "포장지", "폐기 승인서", "거절권"]);
+const SYSTEM_INVENTORY_ITEM_NAMES = new Set(["망치", "택배 상자", "택배상자", "포장지", "반송장", "폐기 승인서", "거절권"]);
 const PROFILE_FACTION_OPTIONS = ["매화", "난초", "국화", "대나무"];
 
 export const menuDefinitions = [
@@ -119,6 +119,7 @@ let selectedParcelItemKeys = [];
 let bugReportPage = 0;
 let adminItemCatalogCache = [];
 let adminItemCatalogPromise = null;
+let rouletteDropItemMode = false;
 const quickProfileCacheTtl = 60 * 1000;
 let rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
 let activeAdminItemSection = "create";
@@ -177,6 +178,9 @@ export function buildDashboard({
   cleanupYachtModule();
   initializeFloatingTooltip();
   const visibleMenus = menuDefinitions.filter((menu) => !menu.adminOnly || adminRoles.includes(profile.role));
+  if (!adminRoles.includes(profile.role)) {
+    rouletteDropItemMode = false;
+  }
   const preferredMenuId = profile?.activeYachtRoomId ? "yacht" : activeMenuId;
   const safeActiveMenuId = visibleMenus.some((menu) => menu.id === preferredMenuId)
     ? preferredMenuId
@@ -329,6 +333,7 @@ function initializeFloatingTooltip() {
 
 function renderMenuContent(menuId, profile) {
   const isThreePlayerResultMode = activeResultMode.includes("3p");
+  const isAdminProfile = adminRoles.includes(profile.role);
   const inventoryItems = buildGroupedInventoryItems(profile.inventory)
     .map(({ item, count }) => {
       const displayItem = normalizeSystemInventoryItemForDisplay(item);
@@ -517,12 +522,21 @@ function renderMenuContent(menuId, profile) {
       <div class="roulette-layout">
         <article class="content-card roulette-side-card">
           <div class="roulette-side-head">
-            <h3>룰렛 항목</h3>
+            <h3>${rouletteDropItemMode && isAdminProfile ? "드랍 아이템 룰렛" : "룰렛 항목"}</h3>
             <form id="roulette-item-form" class="roulette-inline-form">
               <input type="text" name="name" placeholder="항목 이름" required />
               <button type="submit" class="ghost-button compact-button">추가</button>
             </form>
           </div>
+          ${
+            isAdminProfile
+              ? `<label class="inline-check parcel-wrap-check roulette-mode-switch">
+                  <input type="checkbox" id="roulette-drop-mode" ${rouletteDropItemMode ? "checked" : ""} />
+                  <span class="check-indicator" aria-hidden="true"></span>
+                  <span class="check-copy"><strong>드랍 아이템 룰렛</strong><small>아이템 DB 전체를 대상으로 돌립니다.</small></span>
+                </label>`
+              : ""
+          }
           <div id="roulette-item-list" class="roulette-item-list compact-list"><p class="muted">등록된 항목이 없습니다.</p></div>
         </article>
         <article class="content-card roulette-card wide">
@@ -2011,7 +2025,7 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
       fetchPendingParcels(profile.uid, 20),
     ]);
     const dismissedIds = new Set(profile.dismissedAnnouncementIds || []);
-    const hasRejectTicket = hasInventoryItem(profile, (item) => item.name === "폐기 승인서");
+    const hasRejectTicket = hasInventoryItem(profile, (item) => item.name === "반송장");
     const hasHammer = hasInventoryItem(profile, (item) => item.name === "망치");
 
     const announcementCards = announcements
@@ -2049,7 +2063,7 @@ async function renderNotificationBellPanel({ profile, onProfilePatched, onToast 
         const rejectControl = item.wrapped
           ? hasRejectTicket
             ? `<button type="button" class="ghost-button compact-button" data-parcel-action="reject" data-parcel-id="${item.id}">거절</button>`
-            : `<button type="button" class="ghost-button compact-button" data-parcel-action="reject" data-parcel-id="${item.id}" disabled title="폐기 승인서가 필요합니다.">거절</button>`
+            : `<button type="button" class="ghost-button compact-button" data-parcel-action="reject" data-parcel-id="${item.id}" disabled title="반송장이 필요합니다.">거절</button>`
           : `<button type="button" class="ghost-button compact-button" data-parcel-action="reject" data-parcel-id="${item.id}">거절</button>`;
         const revealControl =
           item.wrapped && !item.contentRevealed
@@ -2197,7 +2211,7 @@ async function renderIncomingParcels({ profile, onProfilePatched, onToast }) {
     list.innerHTML = snapshot.docs
       .map((parcelDoc) => {
         const data = parcelDoc.data();
-        const hasRejectTicket = hasInventoryItem(profile, (item) => item.name === "폐기 승인서");
+        const hasRejectTicket = hasInventoryItem(profile, (item) => item.name === "반송장");
         const hasHammer = hasInventoryItem(profile, (item) => item.name === "망치");
         const itemLabel = escapeHtml(data.wrapped && !data.contentRevealed ? "택배 상자로 포장되어 내용물을 확인할 수 없습니다." : buildParcelDisplayText(data));
         const revealControl =
@@ -2309,10 +2323,21 @@ function attachRouletteEvents({ profile, onToast }) {
   const button = document.querySelector("#roulette-button");
   const result = document.querySelector("#roulette-result");
   const wheel = document.querySelector("#roulette-wheel");
+  const dropModeInput = document.querySelector("#roulette-drop-mode");
   if (!form || !button || !result || !wheel) return;
+  const isDropModeAvailable = adminRoles.includes(profile.role);
+
+  if (dropModeInput && !dropModeInput.dataset.rouletteBound) {
+    dropModeInput.dataset.rouletteBound = "1";
+    dropModeInput.addEventListener("change", async () => {
+      rouletteDropItemMode = Boolean(dropModeInput.checked);
+      await hydrateRoulettePanel(profile);
+    });
+  }
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (rouletteDropItemMode && isDropModeAvailable) return;
     const payload = Object.fromEntries(new FormData(form).entries());
     const name = String(payload.name || "").trim();
 
@@ -2339,10 +2364,11 @@ function attachRouletteEvents({ profile, onToast }) {
   });
 
   button.addEventListener("click", async () => {
-    const items = await fetchRouletteItems(profile.uid);
+    const isDropMode = rouletteDropItemMode && isDropModeAvailable;
+    const items = isDropMode ? await fetchDropRouletteItems() : await fetchRouletteItems(profile.uid);
 
     if (!items.length) {
-      onToast("먼저 룰렛 항목을 추가해 주세요.", true);
+      onToast(isDropMode ? "아이템 DB에 등록된 아이템이 없습니다." : "먼저 룰렛 항목을 추가해 주세요.", true);
       return;
     }
 
@@ -2360,7 +2386,11 @@ function attachRouletteEvents({ profile, onToast }) {
     result.textContent = "룰렛을 돌리는 중입니다.";
 
     window.setTimeout(async () => {
-      result.textContent = reward.name;
+      if (isDropMode) {
+        renderDropRouletteResult(result, reward, onToast);
+      } else {
+        result.textContent = reward.name;
+      }
       try {
         const attemptedAt = new Date();
         const logId = buildRouletteLogId(attemptedAt, profile.characterName);
@@ -2370,6 +2400,8 @@ function attachRouletteEvents({ profile, onToast }) {
           loginId: profile.loginId,
           rewardName: reward.name,
           rewardDescription: "",
+          rewardType: isDropMode ? "drop-item" : "roulette",
+          rewardItemId: isDropMode ? reward.id : "",
           createdAt: serverTimestamp(),
           createdAtText: attemptedAt.toLocaleString("ko-KR"),
           attemptedAtId: logId,
@@ -2386,11 +2418,56 @@ function attachRouletteEvents({ profile, onToast }) {
 }
 
 async function hydrateRoulettePanel(profile) {
-  const items = await fetchRouletteItems(profile.uid);
+  const isDropMode = rouletteDropItemMode && adminRoles.includes(profile.role);
+  const items = isDropMode ? await fetchDropRouletteItems() : await fetchRouletteItems(profile.uid);
   resetRoulettePanel();
-  renderRouletteItemList(items, profile);
+  const title = document.querySelector(".roulette-side-head h3");
+  if (title) title.textContent = isDropMode ? "드랍 아이템 룰렛" : "룰렛 항목";
+  renderRouletteItemList(items, profile, { dropMode: isDropMode });
   renderRouletteWheel(items);
   await renderRecentRouletteLogs();
+}
+
+async function fetchDropRouletteItems() {
+  return (await fetchCollectionItems("item-db", "sortOrder")).map((item) => ({
+    ...normalizeSystemInventoryItemForDisplay(item),
+    id: item.id,
+  }));
+}
+
+function renderDropRouletteResult(result, reward, onToast) {
+  const displayItem = normalizeSystemInventoryItemForDisplay(reward);
+  result.innerHTML = `
+    <span class="roulette-drop-result-name">${escapeHtml(displayItem.name || "아이템")}</span>
+    <form class="roulette-drop-transfer" data-roulette-drop-transfer>
+      <label><span>전송 대상</span><input type="text" name="targetCharacterName" placeholder="캐릭터명" required /></label>
+      <button type="submit" class="primary-button compact-button">아이템 전송</button>
+    </form>
+  `;
+  const form = result.querySelector("[data-roulette-drop-transfer]");
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const targetCharacterName = String(new FormData(form).get("targetCharacterName") || "").trim();
+    if (!targetCharacterName) {
+      onToast("전송 대상 캐릭터명을 입력해 주세요.", true);
+      return;
+    }
+    const submitButton = form.querySelector("button");
+    if (submitButton) submitButton.disabled = true;
+    try {
+      await withPendingToast(onToast, () =>
+        adminManageUser({
+          targetCharacterName,
+          addItemIds: [String(reward.id || "").trim()],
+        })
+      );
+      onToast(`${targetCharacterName}님에게 ${displayItem.name || "아이템"}을(를) 전송했습니다.`);
+    } catch (_error) {
+      onToast("드랍 아이템 전송에 실패했습니다.", true);
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
 }
 
 async function fetchRouletteItems(uid) {
@@ -2410,8 +2487,8 @@ function renderRouletteWheel(items) {
   if (!items.length) {
     wheel.classList.add("empty-wheel");
     wheel.style.background = "";
-    labels.innerHTML = '<span class="wheel-placeholder">항목을 추가하면 원판이 만들어집니다.</span>';
-    result.textContent = "항목을 추가하면 돌릴 수 있습니다.";
+    labels.innerHTML = `<span class="wheel-placeholder">${rouletteDropItemMode ? "아이템 DB를 불러오면 원판이 만들어집니다." : "항목을 추가하면 원판이 만들어집니다."}</span>`;
+    result.textContent = rouletteDropItemMode ? "아이템 DB를 불러오면 돌릴 수 있습니다." : "항목을 추가하면 돌릴 수 있습니다.";
     return;
   }
 
@@ -2430,6 +2507,11 @@ function renderRouletteWheel(items) {
     conic-gradient(${segments})
   `;
 
+  if (items.length > 72) {
+    labels.innerHTML = `<span class="wheel-placeholder">아이템 ${items.length}개</span>`;
+    return;
+  }
+
   labels.innerHTML = items
     .map((item, index) => {
       const angle = index * sliceAngle + sliceAngle / 2;
@@ -2441,12 +2523,32 @@ function renderRouletteWheel(items) {
     .join("");
 }
 
-function renderRouletteItemList(items, profile) {
+function renderRouletteItemList(items, profile, { dropMode = false } = {}) {
   const itemList = document.querySelector("#roulette-item-list");
+  const form = document.querySelector("#roulette-item-form");
   if (!itemList) return;
+  if (form) form.classList.toggle("hidden", dropMode);
 
   if (!items.length) {
-    itemList.innerHTML = '<p class="muted">등록된 룰렛 항목이 없습니다.</p>';
+    itemList.innerHTML = `<p class="muted">${dropMode ? "아이템 DB에 등록된 아이템이 없습니다." : "등록된 룰렛 항목이 없습니다."}</p>`;
+    return;
+  }
+
+  if (dropMode) {
+    itemList.innerHTML = `
+      <p class="muted">아이템 DB ${items.length}개가 드랍 후보입니다.</p>
+      ${items
+        .slice(0, 80)
+        .map(
+          (item) => `
+            <div class="roulette-item-row">
+              <strong>${escapeHtml(item.name || item.id || "아이템")}</strong>
+            </div>
+          `
+        )
+        .join("")}
+      ${items.length > 80 ? `<p class="muted">외 ${items.length - 80}개</p>` : ""}
+    `;
     return;
   }
 
@@ -3218,7 +3320,7 @@ async function requestInventoryItemExtraData(item, profile = null) {
 
 function getSpecialInventoryUseConfig(item, profile = null) {
   const itemName = normalizeSystemItemName(item?.name || "");
-  if (itemName !== "위장 물약") {
+  if (itemName !== "위조된 이름표") {
     if (itemName === "식칼") {
       return {
         subtitle: "대상 캐릭터명을 입력하면 상대 인벤토리에서 랜덤 아이템 1개를 훔칩니다.",
@@ -3269,7 +3371,7 @@ function getSpecialInventoryUseConfig(item, profile = null) {
       {
         type: "select",
         name: "targetFactionName",
-        label: "위장할 진영",
+        label: "위조할 진영",
         required: true,
         options: PROFILE_FACTION_OPTIONS.map((value) => ({ value, label: value })),
       },
@@ -3702,8 +3804,8 @@ function ensureInventoryUsePromptModal() {
       </div>
       <form id="inventory-use-prompt-form" class="stack-form compact-form"></form>
       <div class="notice-modal-actions">
-        <button id="inventory-use-prompt-cancel" type="button" class="ghost-button">취소</button>
         <button form="inventory-use-prompt-form" type="submit" class="primary-button">사용</button>
+        <button id="inventory-use-prompt-cancel" type="button" class="ghost-button">취소</button>
       </div>
     </div>
   `;
@@ -4268,7 +4370,8 @@ function buildInventoryGroupKey(item) {
 function normalizeSystemItemName(name) {
   const normalized = String(name || "").trim();
   if (["포장지", "택배상자", "택배 상자"].includes(normalized)) return "택배 상자";
-  if (["거절권", "폐기 승인서"].includes(normalized)) return "폐기 승인서";
+  if (["거절권", "폐기 승인서", "반송장"].includes(normalized)) return "반송장";
+  if (["위장 물약", "위조된 이름표"].includes(normalized)) return "위조된 이름표";
   return normalized;
 }
 
@@ -4280,15 +4383,15 @@ function normalizeNonNegativeAmount(value) {
 function normalizeSystemInventoryItemForDisplay(item) {
   if (!item || typeof item !== "object") return item;
   const name = normalizeSystemItemName(item.name);
-  const nextItem = name === item.name ? { ...item } : {
-    ...item,
-    name,
-    shortLabel: name,
-    description:
-      name === "택배 상자"
-        ? "소포의 내용물을 숨겨서 보낼 때 사용하는 시스템 물품입니다."
-        : "택배 상자로 온 소포를 거절할 때 사용하는 시스템 물품입니다.",
-  };
+  const nextItem = { ...item, name };
+  if (name !== item.name) {
+    nextItem.shortLabel = name;
+    if (name === "택배 상자") {
+      nextItem.description = "소포의 내용물을 숨겨서 보낼 때 사용하는 시스템 물품입니다.";
+    } else if (name === "반송장") {
+      nextItem.description = "택배 상자로 온 소포를 반송할 때 사용하는 시스템 물품입니다.";
+    }
+  }
   if (name === "금고") {
     const storedItem = item?.storedItem && typeof item.storedItem === "object"
       ? normalizeSystemInventoryItemForDisplay(item.storedItem)
@@ -4914,6 +5017,6 @@ function resetRoulettePanel() {
     wheel.classList.remove("spinning");
     wheel.style.removeProperty("--spin-rotation");
   }
-  if (result) result.textContent = "항목을 추가하면 돌릴 수 있습니다.";
-  if (form) form.reset();
+  if (result) result.textContent = rouletteDropItemMode ? "아이템 DB를 불러오면 돌릴 수 있습니다." : "항목을 추가하면 돌릴 수 있습니다.";
+  if (form && !rouletteDropItemMode) form.reset();
 }

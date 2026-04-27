@@ -1274,17 +1274,17 @@ exports.useInventoryItem = onCall(async (request) => {
   } else if (normalizedItemName === "차광포") {
     profileUpdates.publicInventoryHiddenUntil = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
     effectDescription = "72시간 동안 공개 프로필의 인벤토리를 비공개로 전환했습니다.";
-  } else if (normalizedItemName === "위장 물약") {
+  } else if (normalizedItemName === "위조된 이름표") {
     const disguiseFactionName = String(request.data?.extraData?.targetFactionName || "").trim();
     if (!allowedFactions.has(disguiseFactionName)) {
-      throw new HttpsError("invalid-argument", "위장할 진영을 올바르게 선택해 주세요.");
+      throw new HttpsError("invalid-argument", "위조할 진영을 올바르게 선택해 주세요.");
     }
     if (disguiseFactionName === String(userData.factionName || "").trim()) {
       throw new HttpsError("failed-precondition", "현재 진영과 다른 진영으로만 위장할 수 있습니다.");
     }
     profileUpdates.factionDisguiseName = disguiseFactionName;
     profileUpdates.factionDisguiseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    effectDescription = `24시간 동안 공개 프로필의 진영을 ${disguiseFactionName}(으)로 위장합니다.`;
+    effectDescription = `24시간 동안 공개 프로필의 진영을 ${disguiseFactionName}(으)로 위조합니다.`;
   } else if (normalizedItemName === "식칼") {
     const targetCharacterName = String(extraData?.targetCharacterName || "").trim();
     if (!targetCharacterName) {
@@ -2253,7 +2253,7 @@ async function resolveParcel({ parcelId, action, actorUid, automatic }) {
     if (action === "reject" && currentParcel.wrapped) {
       const rejectTicketIndex = receiverInventory.findIndex(isDisposalPermitItem);
       if (rejectTicketIndex === -1) {
-        throw new HttpsError("failed-precondition", "택배 상자로 온 소포를 거절하려면 폐기 승인서가 필요합니다.");
+        throw new HttpsError("failed-precondition", "택배 상자로 온 소포를 반송하려면 반송장이 필요합니다.");
       }
       receiverInventory.splice(rejectTicketIndex, 1);
     }
@@ -3032,7 +3032,8 @@ function buildInventoryItemKey(item) {
 function normalizeSystemItemName(name) {
   const normalized = String(name || "").trim();
   if (["포장지", "택배상자", "택배 상자"].includes(normalized)) return "택배 상자";
-  if (["거절권", "폐기 승인서"].includes(normalized)) return "폐기 승인서";
+  if (["거절권", "폐기 승인서", "반송장"].includes(normalized)) return "반송장";
+  if (["위장 물약", "위조된 이름표"].includes(normalized)) return "위조된 이름표";
   return normalized;
 }
 
@@ -3101,12 +3102,12 @@ function normalizeSystemInventoryItem(item) {
         ? nextItem.description
         : "소포의 내용물을 숨겨서 보낼 때 사용하는 시스템 물품입니다.";
   }
-  if (name === "폐기 승인서") {
-    nextItem.shortLabel = "폐기 승인서";
+  if (name === "반송장") {
+    nextItem.shortLabel = "반송장";
     nextItem.description =
       nextItem.description && !String(nextItem.description).includes("거절")
         ? nextItem.description
-        : "택배 상자로 온 소포를 거절할 때 사용하는 시스템 물품입니다.";
+        : "택배 상자로 온 소포를 반송할 때 사용하는 시스템 물품입니다.";
   }
   return nextItem;
 }
@@ -3114,7 +3115,11 @@ function normalizeSystemInventoryItem(item) {
 function isNamedSystemItem(item, names) {
   const itemName = normalizeSystemItemName(item?.name);
   const itemId = String(item?.itemId || "").replace(/\s+/g, "").toLowerCase();
-  return names.has(itemName) || (names.has("택배 상자") && itemId.includes("택배")) || (names.has("폐기 승인서") && itemId.includes("거절"));
+  return (
+    names.has(itemName) ||
+    (names.has("택배 상자") && itemId.includes("택배")) ||
+    (names.has("반송장") && (itemId.includes("거절") || itemId.includes("반송")))
+  );
 }
 
 function isDeliveryBoxItem(item) {
@@ -3122,7 +3127,7 @@ function isDeliveryBoxItem(item) {
 }
 
 function isDisposalPermitItem(item) {
-  return isNamedSystemItem(item, new Set(["폐기 승인서"]));
+  return isNamedSystemItem(item, new Set(["반송장"]));
 }
 
 function isHammerItem(item) {

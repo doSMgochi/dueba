@@ -93,6 +93,7 @@ const yachtCelebrationKeys = new Set();
 const renderedYachtEmoteEventIds = new Set();
 const yachtSfxAudio = new Map();
 const yachtSfxLooping = new Map();
+const yachtCollisionAudioContexts = new Set();
 let yachtSfxUnlocked = false;
 let yachtScoreFeedback = null;
 let yachtEmoteCooldownUntilMs = 0;
@@ -141,6 +142,11 @@ function stopAllYachtSfx() {
       audio.currentTime = 0;
     } catch {
       // noop
+    }
+  });
+  yachtCollisionAudioContexts.forEach((context) => {
+    if (context?.state === "running") {
+      context.suspend().catch(() => {});
     }
   });
 }
@@ -241,6 +247,23 @@ function stopYachtSfxLoop(key) {
     // noop
   }
   yachtSfxLooping.delete(key);
+}
+
+function stopYachtShakeSfx() {
+  stopYachtSfxLoop("shake");
+}
+
+function bindGlobalYachtSfxGuards() {
+  if (window.__yachtSfxGuardsBound) return;
+  window.__yachtSfxGuardsBound = true;
+  ["pointerup", "pointercancel", "touchend", "touchcancel", "mouseup"].forEach((eventName) => {
+    document.addEventListener(eventName, stopYachtShakeSfx, { passive: true });
+  });
+  window.addEventListener("blur", stopAllYachtSfx);
+  window.addEventListener("pagehide", stopAllYachtSfx);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopAllYachtSfx();
+  });
 }
 
 function renderYachtSfxControls() {
@@ -839,7 +862,7 @@ function bindYachtRoomTools(room) {
   document.querySelectorAll("[data-yacht-sfx-volume]").forEach((input) => {
     if (input.dataset.yachtBound) return;
     input.dataset.yachtBound = "1";
-    input.addEventListener("input", () => {
+    const handleVolumeChange = () => {
       const settings = writeYachtSfxSettings({ volume: Number(input.value || 0) / 100 });
       document.querySelectorAll("[data-yacht-sfx-volume]").forEach((volumeInput) => {
         if (volumeInput !== input) volumeInput.value = String(Math.round(settings.volume * 100));
@@ -850,7 +873,9 @@ function bindYachtRoomTools(room) {
       } else if (settings.enabled) {
         unlockYachtAudio();
       }
-    });
+    };
+    input.addEventListener("input", handleVolumeChange);
+    input.addEventListener("change", handleVolumeChange);
   });
 
   document.querySelectorAll("[data-yacht-emote]").forEach((button) => {
@@ -940,14 +965,21 @@ function bindWaitingRoomEvents(room) {
 
 function bindPlayingRoomEvents(room) {
   bindYachtRoomTools(room);
+  bindGlobalYachtSfxGuards();
 
   const rollButton = document.querySelector("[data-yacht-roll]");
   if (rollButton && !rollButton.dataset.yachtBound) {
     rollButton.dataset.yachtBound = "1";
-    rollButton.addEventListener("pointerenter", () => startYachtSfxLoop("shake"));
-    rollButton.addEventListener("pointerleave", () => stopYachtSfxLoop("shake"));
-    rollButton.addEventListener("pointerup", () => stopYachtSfxLoop("shake"));
-    rollButton.addEventListener("pointercancel", () => stopYachtSfxLoop("shake"));
+    rollButton.addEventListener("pointerenter", (event) => {
+      if (event.pointerType === "mouse") startYachtSfxLoop("shake");
+    });
+    rollButton.addEventListener("pointerleave", (event) => {
+      if (event.pointerType === "mouse") stopYachtSfxLoop("shake");
+    });
+    rollButton.addEventListener("pointerup", stopYachtShakeSfx);
+    rollButton.addEventListener("pointercancel", stopYachtShakeSfx);
+    rollButton.addEventListener("touchend", stopYachtShakeSfx, { passive: true });
+    rollButton.addEventListener("touchcancel", stopYachtShakeSfx, { passive: true });
     rollButton.addEventListener("contextmenu", (event) => event.preventDefault());
     rollButton.addEventListener("pointerdown", () => {
       unlockYachtAudio();
@@ -956,7 +988,7 @@ function bindPlayingRoomEvents(room) {
     rollButton.addEventListener("click", async () => {
     try {
       unlockYachtAudio();
-      stopYachtSfxLoop("shake");
+      stopYachtShakeSfx();
       playYachtSfx("roll");
       await withPendingToast(() => requestRoll(room.id));
       yachtState.onToast?.("\uc8fc\uc0ac\uc704\ub97c \uad74\ub838\uc2b5\ub2c8\ub2e4.");
@@ -980,7 +1012,7 @@ function bindPlayingRoomEvents(room) {
   const sfxVolume = document.querySelector("[data-yacht-sfx-volume]");
   if (sfxVolume && !sfxVolume.dataset.yachtBound) {
     sfxVolume.dataset.yachtBound = "1";
-    sfxVolume.addEventListener("input", () => {
+    const handleVolumeChange = () => {
       const settings = writeYachtSfxSettings({ volume: Number(sfxVolume.value || 0) / 100 });
       yachtSfxAudio.forEach((audio, key) => applyYachtSfxVolume(audio, key));
       if (!isYachtSfxAudible(settings)) {
@@ -988,7 +1020,9 @@ function bindPlayingRoomEvents(room) {
       } else if (settings.enabled) {
         unlockYachtAudio();
       }
-    });
+    };
+    sfxVolume.addEventListener("input", handleVolumeChange);
+    sfxVolume.addEventListener("change", handleVolumeChange);
   }
 
   document.querySelectorAll("[data-yacht-score-category]").forEach((button) => {
@@ -1955,6 +1989,7 @@ function createBoardEngine(THREE, CANNON, RoundedBox) {
       const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextCtor) return null;
       audioContext = new AudioContextCtor();
+      yachtCollisionAudioContexts.add(audioContext);
     }
     return audioContext;
   }
