@@ -33,6 +33,8 @@ const findLoginIdByEmailCallable = httpsCallable(functions, "findLoginIdByEmail"
 const selectTraitCallable = httpsCallable(functions, "selectTrait");
 const getRankingBoardCallable = httpsCallable(functions, "getRankingBoard");
 const adminManageUserCallable = httpsCallable(functions, "adminManageUser");
+const getUserInventoryForAdminCallable = httpsCallable(functions, "getUserInventoryForAdmin");
+const uploadItemDotImageCallable = httpsCallable(functions, "uploadItemDotImage");
 const adminDeleteUserCallable = httpsCallable(functions, "adminDeleteUser");
 const createItemDefinitionCallable = httpsCallable(functions, "createItemDefinition");
 const updateItemDefinitionCallable = httpsCallable(functions, "updateItemDefinition");
@@ -42,6 +44,7 @@ const purchaseShopItemCallable = httpsCallable(functions, "purchaseShopItem");
 const sendParcelCallable = httpsCallable(functions, "sendParcel");
 const respondParcelCallable = httpsCallable(functions, "respondParcel");
 const useInventoryItemCallable = httpsCallable(functions, "useInventoryItem");
+const updateProfileDecorationsCallable = httpsCallable(functions, "updateProfileDecorations");
 const returnProfileDecorationToInventoryCallable = httpsCallable(functions, "returnProfileDecorationToInventory");
 const listAdminLogsCallable = httpsCallable(functions, "listAdminLogs");
 const listBugReportsCallable = httpsCallable(functions, "listBugReports");
@@ -538,6 +541,24 @@ export async function adminManageUser(payload) {
   }
 }
 
+export async function getUserInventoryForAdmin(targetCharacterName) {
+  try {
+    const result = await getUserInventoryForAdminCallable({ targetCharacterName });
+    return result.data?.profile || null;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function uploadItemDotImage({ dataUrl, fileName }) {
+  try {
+    const result = await uploadItemDotImageCallable({ dataUrl, fileName });
+    return String(result.data?.url || "");
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
 export async function adminDeleteUser(characterName) {
   try {
     const result = await adminDeleteUserCallable({ characterName });
@@ -673,6 +694,7 @@ export async function updateProfileDecorations(profileDecorations) {
             if (!id || !spriteKey) return null;
             const rawX = Number(item.x);
             const rawY = Number(item.y);
+            const rawScale = Number(item.scale);
             return {
               id,
               itemId: String(item.itemId || "").trim(),
@@ -681,18 +703,16 @@ export async function updateProfileDecorations(profileDecorations) {
               colorPreset: String(item.colorPreset || "").trim(),
               x: Number.isFinite(rawX) ? Math.min(1, Math.max(0, rawX)) : 0.5,
               y: Number.isFinite(rawY) ? Math.min(1, Math.max(0, rawY)) : 0.5,
+              scale: Number.isFinite(rawScale) ? Math.min(2.5, Math.max(0.5, rawScale)) : 1,
+              flipX: Boolean(item.flipX),
               createdAt: String(item.createdAt || "").trim(),
             };
           })
           .filter(Boolean)
       : [];
 
-    await updateDoc(doc(db, "users", profile.id), {
-      profileDecorations: normalizedDecorations,
-      updatedAt: serverTimestamp(),
-    });
-
-    return {
+    const result = await updateProfileDecorationsCallable({ profileDecorations: normalizedDecorations });
+    return result.data?.profile || {
       docId: profile.id,
       ...profile.data,
       profileDecorations: normalizedDecorations,

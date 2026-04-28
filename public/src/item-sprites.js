@@ -4195,7 +4195,8 @@ export const ITEM_COLOR_PRESETS = [
 ];
 const itemColorPresetMap = new Map(ITEM_COLOR_PRESETS.map((preset) => [preset.id, preset]));
 const removedSpriteCategories = new Set(["스킬", "클래스", "스킬,클래스"]);
-const primaryItemCategories = ["소모품", "기타 아이템", "치장 아이템", "프로필 꾸미기", "음식", "생물", "화폐"];
+const primaryItemCategories = ["소모품", "기타 아이템", "치장 아이템", "프로필 꾸미기", "음식", "생물", "화폐", "커스텀"];
+const CUSTOM_ITEM_SPRITE_STORAGE_KEY = "dueba.custom-item-sprites.v1";
 const categoryAliasMap = new Map([
   ["권한", "소모품"],
   ["광물", "화폐"],
@@ -4215,13 +4216,32 @@ const categoryAliasMap = new Map([
   ["프로필 꾸미기", "프로필 꾸미기"],
   ["음식", "음식"],
   ["화폐", "화폐"],
+  ["커스텀", "커스텀"],
 ]);
 const visibleItemSpriteCatalog = itemSpriteCatalog.filter((item) => !removedSpriteCategories.has(String(item.category || "").trim()));
+let customItemSpriteCatalog = loadCustomItemSpriteCatalog();
 
 export const itemSpriteCategories = [...primaryItemCategories];
 
 export function getItemSprite(spriteKey) {
-  return spriteMap.get(String(spriteKey || "").trim()) || null;
+  const normalizedKey = String(spriteKey || "").trim();
+  if (normalizedKey.startsWith("custom:")) {
+    const registeredCustomSprite = customItemSpriteCatalog.find((item) => item.key === normalizedKey);
+    if (registeredCustomSprite) {
+      return registeredCustomSprite;
+    }
+    const customUrl = normalizedKey.slice("custom:".length).trim();
+    if (!customUrl) return null;
+    return {
+      key: normalizedKey,
+      label: "업로드 도트",
+      category: "커스텀",
+      path: customUrl,
+      fallbackIcon: "🎁",
+      searchText: "커스텀 업로드 도트",
+    };
+  }
+  return spriteMap.get(normalizedKey) || null;
 }
 
 export function findItemSpriteByLabel(label) {
@@ -4232,7 +4252,7 @@ export function getItemSpritesByFilter(searchText = "", category = "") {
   const normalizedSearch = String(searchText || "").trim().toLowerCase();
   const normalizedCategory = String(category || "").trim();
 
-  return visibleItemSpriteCatalog.filter((sprite) => {
+  return getVisibleItemSpriteCatalog().filter((sprite) => {
     if (normalizedCategory && normalizeSpriteCategory(sprite.category) !== normalizedCategory) {
       return false;
     }
@@ -4258,7 +4278,7 @@ export function buildItemSpritePicker({ selectedKey = "", inputName = "spriteKey
     ),
   ].join("");
 
-  const spriteButtons = visibleItemSpriteCatalog
+  const spriteButtons = getVisibleItemSpriteCatalog()
     .map((sprite) => {
       const isSelected = sprite.key === normalizedKey;
       const encodedPath = encodeAssetPath(sprite.path);
@@ -4335,11 +4355,32 @@ export function buildItemImageStyleAttribute(item) {
 
 export function getItemSpriteUrl(spriteOrPath) {
   const path = typeof spriteOrPath === "string" ? spriteOrPath : spriteOrPath?.path;
+  if (/^(https?:|data:|blob:)/i.test(String(path || ""))) {
+    return String(path || "");
+  }
   return encodeAssetPath(path);
 }
 
 export function getItemSpriteCategory(spriteKey) {
   return normalizeSpriteCategory(getItemSprite(spriteKey)?.category || "기타 아이템");
+}
+
+export function registerCustomItemSprite({ url, label = "" } = {}) {
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) return null;
+  const key = `custom:${normalizedUrl}`;
+  const sprite = {
+    key,
+    label: buildCustomSpriteLabel(label || normalizedUrl),
+    category: "커스텀",
+    path: normalizedUrl,
+    fallbackIcon: "🎁",
+    searchText: `커스텀 ${buildCustomSpriteLabel(label || normalizedUrl)} ${normalizedUrl}`.toLowerCase(),
+  };
+  const nextCatalog = [sprite, ...customItemSpriteCatalog.filter((item) => item.key !== key)].slice(0, 60);
+  customItemSpriteCatalog = nextCatalog;
+  persistCustomItemSpriteCatalog(nextCatalog);
+  return sprite;
 }
 
 export function normalizeSpriteCategory(category) {
@@ -4365,7 +4406,68 @@ function buildSelectedSpriteMarkup(sprite) {
   `;
 }
 
+function getVisibleItemSpriteCatalog() {
+  return [...customItemSpriteCatalog, ...visibleItemSpriteCatalog];
+}
+
+function loadCustomItemSpriteCatalog() {
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_ITEM_SPRITE_STORAGE_KEY);
+    const parsed = JSON.parse(raw || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        const path = String(item?.path || "").trim();
+        const key = String(item?.key || "").trim() || (path ? `custom:${path}` : "");
+        if (!path || !key) return null;
+        const label = buildCustomSpriteLabel(item?.label || path);
+        return {
+          key,
+          label,
+          category: "커스텀",
+          path,
+          fallbackIcon: "🎁",
+          searchText: `커스텀 ${label} ${path}`.toLowerCase(),
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function persistCustomItemSpriteCatalog(catalog) {
+  try {
+    window.localStorage.setItem(
+      CUSTOM_ITEM_SPRITE_STORAGE_KEY,
+      JSON.stringify(
+        catalog.map((item) => ({
+          key: item.key,
+          label: item.label,
+          path: item.path,
+        }))
+      )
+    );
+  } catch {
+    // Local storage is optional for the custom sprite quick list.
+  }
+}
+
+function buildCustomSpriteLabel(source) {
+  const raw = String(source || "").trim();
+  if (!raw) return "업로드 도트";
+  const fileName = raw.split("/").pop() || raw;
+  const decodedName = decodeURIComponent(fileName.split("?")[0] || fileName)
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+  return decodedName || "업로드 도트";
+}
+
 function encodeAssetPath(path) {
+  if (/^(https?:|data:|blob:)/i.test(String(path || ""))) {
+    return String(path || "");
+  }
   return String(path || "")
     .split("/")
     .map((segment, index) => (index === 0 ? segment : encodeURIComponent(segment)))
@@ -4379,5 +4481,3 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 }
-
-

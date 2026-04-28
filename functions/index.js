@@ -4,12 +4,15 @@ const { setGlobalOptions } = require("firebase-functions/v2");
 const { initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getStorage } = require("firebase-admin/storage");
+const { randomUUID } = require("crypto");
 
 initializeApp();
 setGlobalOptions({ region: "asia-northeast3", maxInstances: 10 });
 
 const db = getFirestore();
 const adminAuth = getAuth();
+const storageBucket = getStorage().bucket();
 
 const defaultTraits = [
   { id: "pinfu-win", name: "핑후로 화료", successPoints: 5, failPoints: 3, requiredPoints: 10, sortOrder: 1 },
@@ -346,6 +349,7 @@ exports.adminManageUser = onCall(async (request) => {
     currencyDelta = 0,
     traitPointDelta = 0,
     addItemIds = [],
+    removeInventoryKeys = [],
     setRole = "",
     applyToAllUsers = false,
   } = request.data || {};
@@ -382,6 +386,10 @@ exports.adminManageUser = onCall(async (request) => {
   const numericTraitPointDelta = Number(traitPointDelta || 0);
   const nextRole = String(setRole || "").trim();
   const grantedItemNames = itemDefinitions.map((item) => String(item.name || item.id));
+  const normalizedRemoveKeys = Array.isArray(removeInventoryKeys)
+    ? removeInventoryKeys.map((itemKey) => String(itemKey || "").trim()).filter(Boolean)
+    : [];
+  const removedItemNames = [];
 
   for (const targetSnapshot of targetSnapshots) {
     const data = targetSnapshot.data();
@@ -392,6 +400,15 @@ exports.adminManageUser = onCall(async (request) => {
     itemDefinitions.forEach((item) => {
       inventory.push(buildInventoryItemFromDefinition(item));
     });
+    if (normalizedRemoveKeys.length) {
+      normalizedRemoveKeys.forEach((itemKey) => {
+        const removeIndex = inventory.findIndex((item) => buildInventoryItemKey(item) === itemKey);
+        if (removeIndex !== -1) {
+          const [removedItem] = inventory.splice(removeIndex, 1);
+          removedItemNames.push(String(removedItem?.name || removedItem?.itemId || "아이템"));
+        }
+      });
+    }
 
     const updatePayload = {
       currency: nextCurrency,
@@ -416,6 +433,7 @@ exports.adminManageUser = onCall(async (request) => {
     currencyDelta: numericCurrencyDelta,
     traitPointDelta: numericTraitPointDelta,
     addItemNames: grantedItemNames,
+    removeItemNames: removedItemNames,
     setRole: nextRole || "",
     applyToAllUsers: Boolean(applyToAllUsers),
     affectedUserCount: targetSnapshots.length,
@@ -427,6 +445,63 @@ exports.adminManageUser = onCall(async (request) => {
     ok: true,
     target: applyToAllUsers ? "all-users" : normalizedCharacterName,
     affectedUserCount: targetSnapshots.length,
+  };
+});
+
+exports.getUserInventoryForAdmin = onCall(async (request) => {
+  assertAuthenticated(request);
+  await assertAdmin(request.auth.uid);
+  const targetCharacterName = String(request.data?.targetCharacterName || "").trim();
+  if (!targetCharacterName) {
+    throw new HttpsError("invalid-argument", "Target character name is required.");
+  }
+  const targetSnapshot = await findUserSnapshotByCharacterName(targetCharacterName);
+  if (!targetSnapshot) {
+    throw new HttpsError("not-found", "Target user was not found.");
+  }
+  const data = targetSnapshot.data();
+  return {
+    profile: {
+      docId: targetSnapshot.id,
+      uid: String(data.uid || ""),
+      characterName: String(data.characterName || ""),
+      inventory: serialize(Array.isArray(data.inventory) ? data.inventory : []),
+    },
+  };
+});
+
+exports.uploadItemDotImage = onCall(async (request) => {
+  assertAuthenticated(request);
+  await assertAdmin(request.auth.uid);
+
+  const dataUrl = String(request.data?.dataUrl || "").trim();
+  const fileName = String(request.data?.fileName || "dot.png").trim();
+  const match = dataUrl.match(/^data:(image\/(?:png|gif|webp|jpeg));base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) {
+    throw new HttpsError("invalid-argument", "PNG, GIF, WEBP, JPEG 이미지만 업로드할 수 있습니다.");
+  }
+
+  const contentType = match[1];
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length || buffer.length > 512 * 1024) {
+    throw new HttpsError("invalid-argument", "도트 이미지는 512KB 이하만 업로드할 수 있습니다.");
+  }
+
+  const safeName = fileName.replace(/[^\w.\-]+/g, "_").slice(0, 80) || "dot.png";
+  const token = randomUUID();
+  const file = storageBucket.file(`item-dots/custom/${Date.now()}-${safeName}`);
+  await file.save(buffer, {
+    metadata: {
+      contentType,
+      cacheControl: "public, max-age=31536000",
+      metadata: {
+        firebaseStorageDownloadTokens: token,
+      },
+    },
+  });
+
+  return {
+    url: `https://firebasestorage.googleapis.com/v0/b/${storageBucket.name}/o/${encodeURIComponent(file.name)}?alt=media&token=${token}`,
   };
 });
 
@@ -1261,6 +1336,8 @@ exports.useInventoryItem = onCall(async (request) => {
       colorPreset: String(usedItem?.colorPreset || itemDefinition?.colorPreset || "").trim(),
       x: 0.5,
       y: 0.5,
+      scale: 1,
+      flipX: false,
       createdAt: new Date().toISOString(),
     };
     nextProfileDecorations.push(createdDecoration);
@@ -1269,12 +1346,21 @@ exports.useInventoryItem = onCall(async (request) => {
 
   const profileUpdates = {};
   if (normalizedItemName === "낡은 차광포") {
+    if (isFutureIsoTimestamp(userData.publicInventoryHiddenUntil)) {
+      throw new HttpsError("failed-precondition", "이미 차광포 효과가 진행 중입니다.");
+    }
     profileUpdates.publicInventoryHiddenUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     effectDescription = "24시간 동안 공개 프로필의 인벤토리를 비공개로 전환했습니다.";
   } else if (normalizedItemName === "차광포") {
+    if (isFutureIsoTimestamp(userData.publicInventoryHiddenUntil)) {
+      throw new HttpsError("failed-precondition", "이미 차광포 효과가 진행 중입니다.");
+    }
     profileUpdates.publicInventoryHiddenUntil = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
     effectDescription = "72시간 동안 공개 프로필의 인벤토리를 비공개로 전환했습니다.";
   } else if (normalizedItemName === "위조된 이름표") {
+    if (isFutureIsoTimestamp(userData.factionDisguiseUntil)) {
+      throw new HttpsError("failed-precondition", "이미 위조된 이름표 효과가 진행 중입니다.");
+    }
     const disguiseFactionName = String(request.data?.extraData?.targetFactionName || "").trim();
     if (!allowedFactions.has(disguiseFactionName)) {
       throw new HttpsError("invalid-argument", "위조할 진영을 올바르게 선택해 주세요.");
@@ -1381,6 +1467,54 @@ exports.useInventoryItem = onCall(async (request) => {
     grantedCurrency,
     stolenItem: serialize(stolenItem),
     profileUpdates: serialize(profileUpdates),
+  };
+});
+
+exports.updateProfileDecorations = onCall(async (request) => {
+  assertAuthenticated(request);
+  const userSnapshot = await findUserSnapshotByUid(request.auth.uid);
+  if (!userSnapshot) {
+    throw new HttpsError("not-found", "User profile was not found.");
+  }
+
+  const profileDecorations = Array.isArray(request.data?.profileDecorations)
+    ? request.data.profileDecorations
+        .map((item) => {
+          if (!item || typeof item !== "object") return null;
+          const id = String(item.id || "").trim();
+          const spriteKey = String(item.spriteKey || "").trim();
+          if (!id || !spriteKey) return null;
+          const rawX = Number(item.x);
+          const rawY = Number(item.y);
+          const rawScale = Number(item.scale);
+          return {
+            id,
+            itemId: String(item.itemId || "").trim(),
+            name: String(item.name || "").trim(),
+            spriteKey,
+            colorPreset: String(item.colorPreset || "").trim(),
+            x: Number.isFinite(rawX) ? Math.min(1, Math.max(0, rawX)) : 0.5,
+            y: Number.isFinite(rawY) ? Math.min(1, Math.max(0, rawY)) : 0.5,
+            scale: Number.isFinite(rawScale) ? Math.min(2.5, Math.max(0.5, rawScale)) : 1,
+            flipX: Boolean(item.flipX),
+            createdAt: String(item.createdAt || "").trim(),
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  await userSnapshot.ref.update({
+    profileDecorations,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  const updatedSnapshot = await userSnapshot.ref.get();
+  return {
+    ok: true,
+    profile: {
+      docId: updatedSnapshot.id,
+      ...serialize(updatedSnapshot.data()),
+    },
   };
 });
 
@@ -1798,7 +1932,7 @@ exports.yachtAction = onCall(async (request) => {
           throw new HttpsError("failed-precondition", "이미 다음 굴림 상태로 변경되었습니다.");
         }
 
-        const dice = normalizeYachtDice(request.data?.dice);
+        const dice = normalizeYachtDice(room.dice);
         const visualDiceState = normalizeYachtVisualDiceState(
           request.data?.visualDiceState,
           Number(room.diceSeed || 0),
@@ -2361,6 +2495,11 @@ function normalizeNonNegativeCurrency(value) {
   return Number.isFinite(numericValue) ? Math.max(0, numericValue) : 0;
 }
 
+function isFutureIsoTimestamp(value) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) && timestamp > Date.now();
+}
+
 async function runYachtRoomMutation(roomId, handler) {
   const normalizedRoomId = String(roomId || "").trim();
   if (!normalizedRoomId) {
@@ -2556,7 +2695,7 @@ function normalizeYachtVisualDiceState(visualDiceState, fallbackDiceSeed = 0, fa
   }
 
   const diceSeed = Math.max(0, Number(visualDiceState.diceSeed || fallbackDiceSeed || 0));
-  const values = normalizeYachtDice(Array.isArray(visualDiceState.values) ? visualDiceState.values : fallbackDice);
+  const values = normalizeYachtDice(fallbackDice);
   const sourcePoses = visualDiceState.poses && typeof visualDiceState.poses === "object" ? visualDiceState.poses : {};
   const poses = {};
 
@@ -2908,6 +3047,18 @@ function applyYachtScheduledAdvance(transaction, roomRef, room, now) {
 
 function applyYachtLeaveRoom(transaction, snapshot, uid) {
   const room = snapshot.data();
+  if (String(room.status || "") === YACHT_ROOM_STATUS_FINISHED) {
+    const spectators = (Array.isArray(room.spectators) ? room.spectators : []).filter(
+      (spectator) => String(spectator.uid || "") !== String(uid || "")
+    );
+    transaction.update(snapshot.ref, {
+      spectators,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedAtMs: Date.now(),
+    });
+    return;
+  }
+
   let players = (Array.isArray(room.players) ? room.players : []).filter(
     (player) => String(player.uid || "") !== String(uid || "")
   );

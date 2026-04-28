@@ -27,12 +27,15 @@ import {
   getItemSpriteUrl,
   itemSpriteCategories,
   normalizeSpriteCategory,
+  registerCustomItemSprite,
   renderItemVisual,
 } from "./item-sprites.js";
 import { cleanupYachtModule, initYachtMenu, renderYachtMenu } from "./yacht.js";
 import {
   adminDeleteUser,
   adminManageUser,
+  getUserInventoryForAdmin,
+  uploadItemDotImage,
   createItemDefinition,
   createAnnouncement,
   deleteItemDefinition,
@@ -123,6 +126,7 @@ let rouletteDropItemMode = false;
 const quickProfileCacheTtl = 60 * 1000;
 let rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
 let activeAdminItemSection = "create";
+let profileDecorationEditMode = false;
 let mobileInfoExpanded = false;
 
 async function withPendingToast(onToast, task) {
@@ -348,6 +352,7 @@ function renderMenuContent(menuId, profile) {
       `;
     })
     .join("");
+  const activeEffectSummary = renderActiveProfileEffects(profile);
 
   const liveMatchCards = sampleLiveMatches
     .map((match) => {
@@ -458,6 +463,7 @@ function renderMenuContent(menuId, profile) {
       <div class="content-grid two inventory-layout">
         <article class="content-card full">
           <h3>인벤토리</h3>
+          ${activeEffectSummary}
           <ul class="inventory-list">
             ${inventoryItems || '<li class="empty-state">보유 중인 아이템이 없습니다.</li>'}
           </ul>
@@ -1084,6 +1090,65 @@ function renderAdminItemQueue() {
   });
 }
 
+async function fetchUserInventoryByCharacterName(characterName) {
+  const normalizedName = String(characterName || "").trim();
+  if (!normalizedName) return null;
+  return getUserInventoryForAdmin(normalizedName);
+}
+
+function renderAdminTargetInventoryList(profile, onToast, onProfilePatched) {
+  const list = document.querySelector("#admin-target-inventory-list");
+  if (!list) return;
+  if (!profile) {
+    list.classList.add("muted");
+    list.textContent = "대상 캐릭터명을 입력한 뒤 조회해 주세요.";
+    return;
+  }
+  const items = Array.isArray(profile.inventory) ? profile.inventory : [];
+  if (!items.length) {
+    list.classList.add("muted");
+    list.textContent = "보유 아이템이 없습니다.";
+    return;
+  }
+  list.classList.remove("muted");
+  list.innerHTML = items
+    .map((item) => {
+      const displayItem = normalizeSystemInventoryItemForDisplay(item);
+      return `
+        <div class="admin-target-inventory-card inventory-tooltip" data-tooltip="${escapeHtml(buildInventoryTooltipText(displayItem))}">
+          ${renderInventoryItemVisual(displayItem)}
+          <button type="button" class="ghost-button compact-button danger-button" data-admin-remove-inventory-key="${escapeHtml(buildInventoryItemKey(item))}">제거</button>
+        </div>
+      `;
+    })
+    .join("");
+  list.querySelectorAll("[data-admin-remove-inventory-key]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const itemKey = button.dataset.adminRemoveInventoryKey || "";
+      if (!itemKey) return;
+      try {
+        button.disabled = true;
+        await withPendingToast(onToast, () =>
+          adminManageUser({
+            targetCharacterName: profile.characterName,
+            removeInventoryKeys: [itemKey],
+          })
+        );
+        const updatedProfile = await fetchUserInventoryByCharacterName(profile.characterName);
+        renderAdminTargetInventoryList(updatedProfile, onToast, onProfilePatched);
+        await renderAdminLogTable("operate");
+        onToast("대상 인벤토리에서 아이템을 제거했습니다.");
+      } catch (error) {
+        onToast(error.message || "아이템 제거에 실패했습니다.", true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+}
+
 function renderProfileQuickButton({ profile, onProfilePatched, onToast }) {
   const headerActions = document.querySelector(".header-actions");
   if (!headerActions) return;
@@ -1138,9 +1203,24 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
       item.nickname === profile.nickname
   );
   const isOwnProfile = viewerProfile?.uid && viewerProfile.uid === profile.uid;
+  if (!isOwnProfile) profileDecorationEditMode = false;
+  const canEditProfileDecorations = Boolean(isOwnProfile && profileDecorationEditMode);
   const factionName = getDisplayedProfileFactionName(profile, isOwnProfile);
   const factionThemeClass = getFactionThemeClass(factionName);
   const profileDecorations = normalizeProfileDecorations(profile.profileDecorations);
+  const modalProfileState = {
+    profile: {
+      ...profile,
+      profileDecorations,
+    },
+    viewerProfile: isOwnProfile
+      ? {
+          ...(viewerProfile || {}),
+          ...profile,
+          profileDecorations,
+        }
+      : viewerProfile || null,
+  };
   const inventoryHiddenForViewer = !isOwnProfile && isPublicInventoryHidden(profile);
   const nicknameList = [profile.nickname, ...(Array.isArray(profile.extraNicknames) ? profile.extraNicknames : [])]
     .map((item) => String(item || "").trim())
@@ -1167,8 +1247,8 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
       <div class="profile-lobby-card profile-lobby-card-enter ${factionThemeClass}">
         <div class="profile-card-frame profile-card-frame-outer" aria-hidden="true"></div>
         <div class="profile-card-frame profile-card-frame-inner" aria-hidden="true"></div>
-        <div class="profile-decoration-layer" data-profile-decoration-layer data-profile-decoration-editable="${isOwnProfile ? "true" : "false"}">
-          ${profileDecorations.map((item) => renderProfileDecorationVisual(item, isOwnProfile)).join("")}
+        <div class="profile-decoration-layer" data-profile-decoration-layer data-profile-decoration-editable="${canEditProfileDecorations ? "true" : "false"}">
+          ${profileDecorations.map((item) => renderProfileDecorationVisual(item, canEditProfileDecorations)).join("")}
         </div>
         <div class="profile-lobby-visual">
           <div class="profile-seal-panel">
@@ -1199,11 +1279,53 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
     </div>
   `;
   profile.profileDecorations = profileDecorations;
+  modal.__profileQuickState = modalProfileState;
   bindProfileDecorationEditor({ modal, profile, onProfilePatched, onToast });
 
   sealButton.classList.toggle("hidden", !isOwnProfile);
   fileInput.classList.add("hidden");
   sealButton.onclick = () => fileInput.click();
+  const profileActions = modal.querySelector(".profile-quick-actions");
+  profileActions?.querySelector("[data-profile-decoration-edit-toggle]")?.remove();
+  if (profileActions && isOwnProfile && !profileActions.querySelector("[data-profile-decoration-edit-toggle]")) {
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = profileDecorationEditMode ? "primary-button" : "ghost-button";
+    editButton.dataset.profileDecorationEditToggle = "true";
+    editButton.textContent = profileDecorationEditMode ? "꾸미기 편집 종료" : "프로필 꾸미기 편집";
+    editButton.addEventListener("click", async () => {
+      const nextEditMode = !profileDecorationEditMode;
+      profileDecorationEditMode = nextEditMode;
+      const latestState = modal.__profileQuickState || {};
+      let nextProfile =
+        latestState.profile || {
+          ...profile,
+          profileDecorations: normalizeProfileDecorations(profile.profileDecorations),
+        };
+      let nextViewerProfile = latestState.viewerProfile || viewerProfile;
+      if (!nextEditMode && isOwnProfile) {
+        try {
+          const refreshedProfile = await refreshCurrentUserProfile();
+          if (refreshedProfile) {
+            nextProfile = {
+              ...refreshedProfile,
+              profileDecorations: normalizeProfileDecorations(refreshedProfile.profileDecorations),
+            };
+            nextViewerProfile = nextProfile;
+          }
+        } catch {
+          // Keep the modal state fallback if the profile refresh fails.
+        }
+      }
+      await showProfileQuickModal({
+        profile: nextProfile,
+        viewerProfile: nextViewerProfile,
+        onProfilePatched,
+        onToast,
+      });
+    });
+    profileActions.insertBefore(editButton, closeButton);
+  }
   fileInput.onchange = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -2439,20 +2561,32 @@ function renderDropRouletteResult(result, reward, onToast) {
   const displayItem = normalizeSystemInventoryItemForDisplay(reward);
   result.innerHTML = `
     <span class="roulette-drop-result-name">${escapeHtml(displayItem.name || "아이템")}</span>
-    <form class="roulette-drop-transfer" data-roulette-drop-transfer>
-      <label><span>전송 대상</span><input type="text" name="targetCharacterName" placeholder="캐릭터명" required /></label>
-      <button type="submit" class="primary-button compact-button">아이템 전송</button>
-    </form>
   `;
-  const form = result.querySelector("[data-roulette-drop-transfer]");
-  form?.addEventListener("submit", async (event) => {
+  openDropRouletteTransferModal(reward, onToast);
+}
+
+function openDropRouletteTransferModal(reward, onToast) {
+  const displayItem = normalizeSystemInventoryItemForDisplay(reward);
+  const modal = ensureDropRouletteTransferModal();
+  const title = modal.querySelector("#drop-roulette-transfer-title");
+  const form = modal.querySelector("#drop-roulette-transfer-form");
+  const cancelButton = modal.querySelector("#drop-roulette-transfer-cancel");
+  const closeButton = modal.querySelector("#drop-roulette-transfer-close");
+  if (!title || !form || !cancelButton || !closeButton) return;
+  title.textContent = `${displayItem.name || "아이템"} 전송`;
+  form.reset();
+  modal.classList.remove("hidden");
+  const close = () => modal.classList.add("hidden");
+  cancelButton.onclick = close;
+  closeButton.onclick = close;
+  form.onsubmit = async (event) => {
     event.preventDefault();
     const targetCharacterName = String(new FormData(form).get("targetCharacterName") || "").trim();
     if (!targetCharacterName) {
       onToast("전송 대상 캐릭터명을 입력해 주세요.", true);
       return;
     }
-    const submitButton = form.querySelector("button");
+    const submitButton = modal.querySelector('button[form="drop-roulette-transfer-form"]');
     if (submitButton) submitButton.disabled = true;
     try {
       await withPendingToast(onToast, () =>
@@ -2462,12 +2596,45 @@ function renderDropRouletteResult(result, reward, onToast) {
         })
       );
       onToast(`${targetCharacterName}님에게 ${displayItem.name || "아이템"}을(를) 전송했습니다.`);
+      close();
     } catch (_error) {
       onToast("드랍 아이템 전송에 실패했습니다.", true);
     } finally {
       if (submitButton) submitButton.disabled = false;
     }
+  };
+}
+
+function ensureDropRouletteTransferModal() {
+  let modal = document.querySelector("#drop-roulette-transfer-modal");
+  if (modal) return modal;
+  modal = document.createElement("div");
+  modal.id = "drop-roulette-transfer-modal";
+  modal.className = "modal-backdrop hidden";
+  modal.innerHTML = `
+    <div class="modal-panel inventory-use-prompt-panel">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">DROP ITEM</p>
+          <h2 id="drop-roulette-transfer-title">아이템 전송</h2>
+          <p class="muted">룰렛 결과 아이템을 받을 캐릭터명을 입력해 주세요.</p>
+        </div>
+        <button id="drop-roulette-transfer-close" type="button" class="icon-button">x</button>
+      </div>
+      <form id="drop-roulette-transfer-form" class="stack-form compact-form">
+        <label><span>전송 대상</span><input type="text" name="targetCharacterName" placeholder="캐릭터명" required /></label>
+      </form>
+      <div class="notice-modal-actions">
+        <button form="drop-roulette-transfer-form" type="submit" class="primary-button">전송</button>
+        <button id="drop-roulette-transfer-cancel" type="button" class="ghost-button">취소</button>
+      </div>
+    </div>
+  `;
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.classList.add("hidden");
   });
+  document.body.append(modal);
+  return modal;
 }
 
 async function fetchRouletteItems(uid) {
@@ -2676,6 +2843,13 @@ function renderAdminSection(body) {
               <button type="button" class="ghost-button" id="admin-add-item-button">아이템 추가</button>
               <div id="admin-item-queue" class="admin-item-queue"></div>
             </div>
+            <div class="admin-target-inventory-box">
+              <div class="admin-target-inventory-head">
+                <span>대상 인벤토리</span>
+                <button type="button" class="ghost-button compact-button" id="admin-load-target-inventory">인벤토리 조회</button>
+              </div>
+              <div id="admin-target-inventory-list" class="admin-target-inventory-list muted">대상 캐릭터명을 입력한 뒤 조회해 주세요.</div>
+            </div>
             <label>
               <span>권한 변경</span>
               <select name="setRole">
@@ -2783,6 +2957,12 @@ function renderAdminItemSection() {
           <span>도트 선택</span>
           ${buildItemSpritePicker({ pickerId: "admin-item-create-picker" })}
         </label>
+        <label class="custom-dot-upload">
+          <span>도트 이미지 추가</span>
+          <input type="file" accept="image/png,image/gif,image/webp,image/jpeg" data-custom-sprite-upload />
+          <strong data-custom-dot-label>파일 선택</strong>
+          <small class="muted">PNG/GIF/WEBP/JPEG, 512KB 이하</small>
+        </label>
         <div class="item-color-preset-row">
           <span>도트 색상</span>
           <input type="hidden" name="colorPreset" value="" />
@@ -2824,6 +3004,12 @@ function renderAdminItemSection() {
         <label>
           <span>도트 선택</span>
           ${buildItemSpritePicker({ pickerId: "admin-item-edit-picker" })}
+        </label>
+        <label class="custom-dot-upload">
+          <span>도트 이미지 추가</span>
+          <input type="file" accept="image/png,image/gif,image/webp,image/jpeg" data-custom-sprite-upload />
+          <strong data-custom-dot-label>파일 선택</strong>
+          <small class="muted">PNG/GIF/WEBP/JPEG, 512KB 이하</small>
         </label>
         <div class="item-color-preset-row">
           <span>도트 색상</span>
@@ -2895,6 +3081,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
     const applyAllCheckbox = manageForm.querySelector('input[name="applyToAllUsers"]');
     const itemSelect = manageForm.querySelector("#admin-item-select");
     const addItemButton = manageForm.querySelector("#admin-add-item-button");
+    const loadTargetInventoryButton = manageForm.querySelector("#admin-load-target-inventory");
 
     // 지급 아이템 대기열은 유저 조정 화면을 새로 열 때마다 초기화합니다.
     // 이전 작업에서 담아둔 항목이 다음 조정에 섞여 들어가는 것을 방지합니다.
@@ -2920,6 +3107,28 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
       pendingAdminItemIds.push(selectedId);
       renderAdminItemQueue();
       syncAdminItemSelector(itemSelect, selectedId);
+    });
+
+    loadTargetInventoryButton?.addEventListener("click", async () => {
+      const targetCharacterName = String(targetInput?.value || "").trim();
+      if (!targetCharacterName) {
+        onToast("대상 캐릭터명을 먼저 입력해 주세요.", true);
+        return;
+      }
+      try {
+        loadTargetInventoryButton.disabled = true;
+        const targetProfile = await fetchUserInventoryByCharacterName(targetCharacterName);
+        if (!targetProfile) {
+          renderAdminTargetInventoryList(null, onToast, onProfilePatched);
+          onToast("대상 유저를 찾지 못했습니다.", true);
+          return;
+        }
+        renderAdminTargetInventoryList(targetProfile, onToast, onProfilePatched);
+      } catch (error) {
+        onToast(error.message || "대상 인벤토리를 불러오지 못했습니다.", true);
+      } finally {
+        loadTargetInventoryButton.disabled = false;
+      }
     });
 
     manageForm.addEventListener("submit", async (event) => {
@@ -3612,6 +3821,7 @@ function normalizeProfileDecorations(items) {
       if (!id || !spriteKey || !getItemSprite(spriteKey)) return null;
       const rawX = Number(item.x);
       const rawY = Number(item.y);
+      const rawScale = Number(item.scale);
       return {
         id,
         itemId: String(item.itemId || "").trim(),
@@ -3620,6 +3830,8 @@ function normalizeProfileDecorations(items) {
         colorPreset: String(item.colorPreset || "").trim(),
         x: Number.isFinite(rawX) ? Math.min(1, Math.max(0, rawX)) : 0.5,
         y: Number.isFinite(rawY) ? Math.min(1, Math.max(0, rawY)) : 0.5,
+        scale: Number.isFinite(rawScale) ? Math.min(2.5, Math.max(0.5, rawScale)) : 1,
+        flipX: Boolean(item.flipX),
         createdAt: String(item.createdAt || "").trim(),
       };
     })
@@ -3631,13 +3843,15 @@ function renderProfileDecorationVisual(item, isOwnProfile) {
   if (!sprite) return "";
   const safeLeft = Math.round(Math.min(1, Math.max(0, Number(item.x) || 0.5)) * 1000) / 10;
   const safeTop = Math.round(Math.min(1, Math.max(0, Number(item.y) || 0.5)) * 1000) / 10;
+  const safeScale = Math.round(Math.min(2.5, Math.max(0.5, Number(item.scale) || 1)) * 100) / 100;
   const label = escapeHtml(item?.name || sprite.label || "프로필 장식");
+  const imageStyle = buildProfileDecorationImageStyle(item);
   return `
     <div
       class="profile-decoration-item${isOwnProfile ? " is-editable" : ""}"
       data-profile-decoration-id="${escapeHtml(item.id)}"
       data-profile-decoration-name="${label}"
-      style="left:${safeLeft}%;top:${safeTop}%;"
+      style="left:${safeLeft}%;top:${safeTop}%;--profile-decoration-scale:${safeScale};"
       ${isOwnProfile ? "" : 'aria-hidden="true"'}
     >
       ${
@@ -3645,7 +3859,16 @@ function renderProfileDecorationVisual(item, isOwnProfile) {
           ? `<button type="button" class="profile-decoration-remove" data-profile-decoration-remove="${escapeHtml(item.id)}" aria-label="${label} 장식을 인벤토리로 되돌리기">x</button>`
           : ""
       }
-      <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${label}" class="profile-decoration-image" loading="lazy"${buildItemImageStyleAttribute(item)} />
+      ${
+        isOwnProfile
+          ? `<div class="profile-decoration-controls" aria-label="${label} 장식 조정">
+              <button type="button" data-profile-decoration-scale="-0.1" aria-label="작게">-</button>
+              <button type="button" data-profile-decoration-flip aria-label="좌우 반전">↔</button>
+              <button type="button" data-profile-decoration-scale="0.1" aria-label="크게">+</button>
+            </div>`
+          : ""
+      }
+      <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${label}" class="profile-decoration-image" loading="lazy" style="${escapeHtml(imageStyle)}" />
     </div>
   `;
 }
@@ -3660,6 +3883,49 @@ function bindProfileDecorationEditor({ modal, profile, onProfilePatched, onToast
   if (!nodes.length) return;
 
   let activeState = null;
+  let decorationPersistChain = Promise.resolve();
+  const syncProfileQuickModalState = (mergedProfile) => {
+    profile.profileDecorations = mergedProfile.profileDecorations;
+    const currentModalState = modal.__profileQuickState || {};
+    modal.__profileQuickState = {
+      profile: mergedProfile,
+      viewerProfile:
+        currentModalState.viewerProfile?.uid === mergedProfile.uid
+          ? {
+              ...currentModalState.viewerProfile,
+              ...mergedProfile,
+              profileDecorations: mergedProfile.profileDecorations,
+            }
+          : currentModalState.viewerProfile || null,
+    };
+  };
+  const persistDecorations = async (nextDecorations, options = {}) => {
+    const { syncOuterProfile = false } = options;
+    const updatedProfile = await updateProfileDecorations(nextDecorations);
+    const mergedProfile = {
+      ...profile,
+      ...updatedProfile,
+      profileDecorations: normalizeProfileDecorations(updatedProfile.profileDecorations || nextDecorations),
+    };
+    syncProfileQuickModalState(mergedProfile);
+    if (syncOuterProfile) {
+      await onProfilePatched?.(mergedProfile);
+    }
+    return mergedProfile;
+  };
+  const queueDecorationPersist = async (nextDecorations, revertDecorations, errorMessage) => {
+    profile.profileDecorations = normalizeProfileDecorations(nextDecorations);
+    const runPersist = decorationPersistChain.then(async () => {
+      try {
+        await persistDecorations(nextDecorations);
+      } catch (error) {
+        profile.profileDecorations = normalizeProfileDecorations(revertDecorations);
+        throw new Error(error.message || errorMessage);
+      }
+    });
+    decorationPersistChain = runPersist.catch(() => null);
+    return runPersist;
+  };
 
   const applyPosition = (node, x, y) => {
     node.style.left = `${Math.round(x * 1000) / 10}%`;
@@ -3694,14 +3960,7 @@ function bindProfileDecorationEditor({ modal, profile, onProfilePatched, onToast
     );
 
     try {
-      const updatedProfile = await updateProfileDecorations(nextDecorations);
-      const mergedProfile = {
-        ...profile,
-        ...updatedProfile,
-        profileDecorations: normalizeProfileDecorations(updatedProfile.profileDecorations || nextDecorations),
-      };
-      profile.profileDecorations = mergedProfile.profileDecorations;
-      await onProfilePatched?.(mergedProfile);
+      await persistDecorations(nextDecorations);
     } catch (error) {
       applyPosition(node, startX, startY);
       profile.profileDecorations = normalizeProfileDecorations(profile.profileDecorations).map((item) =>
@@ -3745,7 +4004,7 @@ function bindProfileDecorationEditor({ modal, profile, onProfilePatched, onToast
             ...updatedProfile,
             profileDecorations: normalizeProfileDecorations(updatedProfile.profileDecorations),
           };
-          profile.profileDecorations = mergedProfile.profileDecorations;
+          syncProfileQuickModalState(mergedProfile);
           button.closest("[data-profile-decoration-id]")?.remove();
           await onProfilePatched?.(mergedProfile);
         }
@@ -3756,11 +4015,78 @@ function bindProfileDecorationEditor({ modal, profile, onProfilePatched, onToast
     });
   });
 
+  layer.querySelectorAll("[data-profile-decoration-scale]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const node = button.closest("[data-profile-decoration-id]");
+      const decorationId = node?.dataset.profileDecorationId || "";
+      const delta = Number(button.dataset.profileDecorationScale || 0);
+      if (!decorationId || !Number.isFinite(delta)) return;
+      const previousDecorations = normalizeProfileDecorations(profile.profileDecorations);
+      const nextDecorations = normalizeProfileDecorations(profile.profileDecorations).map((item) =>
+        item.id === decorationId ? { ...item, scale: Math.min(2.5, Math.max(0.5, Number(item.scale || 1) + delta)) } : item
+      );
+      try {
+        const nextItem = nextDecorations.find((item) => item.id === decorationId);
+        if (node instanceof HTMLElement && nextItem) {
+          const image = node.querySelector(".profile-decoration-image");
+          if (image instanceof HTMLElement) {
+            image.style.transform = buildProfileDecorationTransform(nextItem);
+          }
+        }
+        await queueDecorationPersist(nextDecorations, previousDecorations, "프로필 장식 크기를 저장하지 못했습니다.");
+      } catch (error) {
+        const currentItem = previousDecorations.find((item) => item.id === decorationId);
+        if (node instanceof HTMLElement && currentItem) {
+          const image = node.querySelector(".profile-decoration-image");
+          if (image instanceof HTMLElement) {
+            image.style.transform = buildProfileDecorationTransform(currentItem);
+          }
+        }
+        onToast?.(error.message || "프로필 장식 크기를 저장하지 못했습니다.", true);
+      }
+    });
+  });
+
+  layer.querySelectorAll("[data-profile-decoration-flip]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const node = button.closest("[data-profile-decoration-id]");
+      const decorationId = node?.dataset.profileDecorationId || "";
+      if (!decorationId) return;
+      const previousDecorations = normalizeProfileDecorations(profile.profileDecorations);
+      const nextDecorations = normalizeProfileDecorations(profile.profileDecorations).map((item) =>
+        item.id === decorationId ? { ...item, flipX: !item.flipX } : item
+      );
+      try {
+        const nextItem = nextDecorations.find((item) => item.id === decorationId);
+        if (node instanceof HTMLElement && nextItem) {
+          const image = node.querySelector(".profile-decoration-image");
+          if (image instanceof HTMLElement) {
+            image.style.transform = buildProfileDecorationTransform(nextItem);
+          }
+        }
+        await queueDecorationPersist(nextDecorations, previousDecorations, "프로필 장식 반전을 저장하지 못했습니다.");
+      } catch (error) {
+        const currentItem = previousDecorations.find((item) => item.id === decorationId);
+        if (node instanceof HTMLElement && currentItem) {
+          const image = node.querySelector(".profile-decoration-image");
+          if (image instanceof HTMLElement) {
+            image.style.transform = buildProfileDecorationTransform(currentItem);
+          }
+        }
+        onToast?.(error.message || "프로필 장식 반전을 저장하지 못했습니다.", true);
+      }
+    });
+  });
+
   nodes.forEach((node) => {
     if (!(node instanceof HTMLElement)) return;
     node.addEventListener("pointerdown", (event) => {
       if (activeState) return;
-      if (event.target instanceof Element && event.target.closest("[data-profile-decoration-remove]")) {
+      if (event.target instanceof Element && event.target.closest("[data-profile-decoration-remove], .profile-decoration-controls")) {
         return;
       }
       const decorationId = node.dataset.profileDecorationId || "";
@@ -4242,6 +4568,29 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("파일을 읽지 못했습니다."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildProfileDecorationTransform(item) {
+  const safeScale = Math.round(Math.min(2.5, Math.max(0.5, Number(item?.scale) || 1)) * 100) / 100;
+  const safeFlip = item?.flipX ? -1 : 1;
+  return `scaleX(${safeFlip}) scale(${safeScale})`;
+}
+
+function buildProfileDecorationImageStyle(item) {
+  const filter = getItemColorPresetFilter(item?.colorPreset);
+  const transform = buildProfileDecorationTransform(item);
+  return [filter ? `filter:${filter}` : "", `transform:${transform}`, "transform-origin:center"]
+    .filter(Boolean)
+    .join(";");
+}
+
 function formatMaybeTimestamp(value) {
   if (!value) return "";
   if (typeof value === "string") return value;
@@ -4362,8 +4711,11 @@ function buildInventoryGroupKey(item) {
     displayItem?.itemId || displayItem?.name || "item",
     displayItem?.name || "",
     displayItem?.description || "",
+    displayItem?.spriteKey || "",
+    displayItem?.colorPreset || "",
     storedItem?.itemId || storedItem?.name || "",
     storedItem?.grantedAt || "",
+    storedItem?.colorPreset || "",
   ].join("::");
 }
 
@@ -4439,6 +4791,50 @@ function buildItemColorPresetButtons(selectedPreset = "") {
       </button>
     `;
   }).join("");
+}
+
+function renderActiveProfileEffects(profile) {
+  const effects = [];
+  if (isFutureIsoTimestamp(profile?.publicInventoryHiddenUntil)) {
+    effects.push({
+      label: "차광포",
+      until: profile.publicInventoryHiddenUntil,
+      detail: "공개 프로필 인벤토리 비공개",
+    });
+  }
+  if (isFutureIsoTimestamp(profile?.factionDisguiseUntil)) {
+    effects.push({
+      label: "위조된 이름표",
+      until: profile.factionDisguiseUntil,
+      detail: `${profile.factionDisguiseName || "다른 진영"}으로 위장 중`,
+    });
+  }
+  if (!effects.length) return "";
+  return `
+    <div class="active-effect-list">
+      ${effects
+        .map(
+          (effect) => `
+            <div class="active-effect-chip">
+              <strong>${escapeHtml(effect.label)}</strong>
+              <span>${escapeHtml(effect.detail)}</span>
+              <small>종료: ${escapeHtml(formatEffectUntil(effect.until))}</small>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function formatEffectUntil(value) {
+  const timestamp = Date.parse(String(value || ""));
+  if (!Number.isFinite(timestamp)) return "알 수 없음";
+  const remainingMs = Math.max(0, timestamp - Date.now());
+  const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+  const minutes = Math.ceil((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+  const remainingText = hours > 0 ? `약 ${hours}시간 ${minutes}분 남음` : `약 ${minutes}분 남음`;
+  return `${new Date(timestamp).toLocaleString("ko-KR")} (${remainingText})`;
 }
 
 function isFutureIsoTimestamp(value) {
@@ -4648,6 +5044,7 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
   const sellInShopCheckbox = form.elements.sellInShop;
   const priceRow = form.querySelector("[data-shop-price-row]");
   const priceInput = form.elements.price;
+  const customSpriteUpload = form.querySelector("[data-custom-sprite-upload]");
 
   const syncCategory = () => {
     const autoCategory = getItemSpriteCategory(hiddenSpriteInput?.value || "");
@@ -4743,6 +5140,29 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
       });
     });
     sellInShopCheckbox?.addEventListener("change", syncShopRow);
+    customSpriteUpload?.addEventListener("change", async (event) => {
+      const file = event.target.files?.[0];
+      if (!file || !hiddenSpriteInput) return;
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        const label = form.querySelector("[data-custom-dot-label]");
+        if (label) label.textContent = "업로드 중...";
+        const downloadUrl = await uploadItemDotImage({ dataUrl, fileName: file.name });
+        const customSprite = registerCustomItemSprite({ url: downloadUrl, label: file.name });
+        hiddenSpriteInput.value = customSprite?.key || `custom:${downloadUrl}`;
+        syncItemSpritePicker(picker, hiddenSpriteInput.value);
+        syncCategory();
+        syncFoodRewardRow();
+        syncColorPresetPreview();
+        if (label) label.textContent = "업로드 완료";
+      } catch (error) {
+        window.alert(error.message || "도트 이미지 업로드에 실패했습니다.");
+        const label = form.querySelector("[data-custom-dot-label]");
+        if (label) label.textContent = "파일 선택";
+      } finally {
+        event.target.value = "";
+      }
+    });
     form.dataset.metaBound = "true";
   }
 

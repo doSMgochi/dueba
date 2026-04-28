@@ -94,6 +94,7 @@ const renderedYachtEmoteEventIds = new Set();
 const yachtSfxAudio = new Map();
 const yachtSfxLooping = new Map();
 const yachtCollisionAudioContexts = new Set();
+let yachtShakeLoopTimeoutId = 0;
 let yachtSfxUnlocked = false;
 let yachtScoreFeedback = null;
 let yachtEmoteCooldownUntilMs = 0;
@@ -127,6 +128,8 @@ function isYachtSfxAudible(settings = readYachtSfxSettings()) {
 }
 
 function stopAllYachtSfx() {
+  window.clearTimeout(yachtShakeLoopTimeoutId);
+  yachtShakeLoopTimeoutId = 0;
   yachtSfxLooping.forEach((audio) => {
     audio.pause();
     try {
@@ -234,10 +237,20 @@ function startYachtSfxLoop(key) {
   if (!isYachtSfxAudible(settings) || !yachtSfxUnlocked) return;
   if (yachtSfxLooping.has(key)) return;
   const audio = playYachtSfx(key, { loop: true });
-  if (audio) yachtSfxLooping.set(key, audio);
+  if (audio) {
+    yachtSfxLooping.set(key, audio);
+    if (key === "shake") {
+      window.clearTimeout(yachtShakeLoopTimeoutId);
+      yachtShakeLoopTimeoutId = window.setTimeout(stopYachtShakeSfx, 1400);
+    }
+  }
 }
 
 function stopYachtSfxLoop(key) {
+  if (key === "shake") {
+    window.clearTimeout(yachtShakeLoopTimeoutId);
+    yachtShakeLoopTimeoutId = 0;
+  }
   const audio = yachtSfxLooping.get(key);
   if (!audio) return;
   audio.pause();
@@ -981,9 +994,9 @@ function bindPlayingRoomEvents(room) {
     rollButton.addEventListener("touchend", stopYachtShakeSfx, { passive: true });
     rollButton.addEventListener("touchcancel", stopYachtShakeSfx, { passive: true });
     rollButton.addEventListener("contextmenu", (event) => event.preventDefault());
-    rollButton.addEventListener("pointerdown", () => {
+    rollButton.addEventListener("pointerdown", (event) => {
       unlockYachtAudio();
-      startYachtSfxLoop("shake");
+      if (event.pointerType === "mouse") startYachtSfxLoop("shake");
     });
     rollButton.addEventListener("click", async () => {
     try {
@@ -1470,20 +1483,6 @@ function resolveScoreCellText(player, rowId, dice = [], viewerUid = "", canPrevi
 }
 
 function getDisplayedDiceValues(room) {
-  const roomKey = String(room?.id || "");
-  const diceSeed = Number(room?.diceSeed || 0);
-  const localVisualState = boardVisualDiceCache.get(roomKey);
-  if (
-    canUseLocalVisualDiceState(room) &&
-    localVisualState?.diceSeed === diceSeed &&
-    Array.isArray(localVisualState.values)
-  ) {
-    return normalizeDice(localVisualState.values);
-  }
-  const sharedVisualState = getSharedVisualDiceState(room);
-  if (Array.isArray(sharedVisualState?.values)) {
-    return normalizeDice(sharedVisualState.values);
-  }
   return normalizeDice(room?.dice);
 }
 
@@ -1529,7 +1528,7 @@ function applyRoomScoreFeedback(previousRoom, nextRoom) {
         if (currentKey !== nextKey || Date.now() - Number(yachtScoreFeedback?.at || 0) > 1200) {
           yachtScoreFeedback = feedback;
           showYachtScoreFeedback(feedback.categoryId, feedback.score);
-          if (rowId === "yacht") {
+          if (rowId === "yacht" && Number(feedback.score || 0) >= 50) {
             const boardEl = document.querySelector("[data-yacht-physics-board]");
             showYachtCelebration(boardEl, nextRoom.id, Number(nextRoom.diceSeed || 0));
           }
@@ -1568,11 +1567,7 @@ function buildLocalVisualDiceStatePayload(room) {
   const diceSeed = Number(liveRoom.diceSeed || 0);
   const localVisualState = boardVisualDiceCache.get(roomKey);
   const sharedVisualState = getSharedVisualDiceState(liveRoom);
-  const values = normalizeDice(
-    localVisualState?.diceSeed === diceSeed && Array.isArray(localVisualState.values)
-      ? localVisualState.values
-      : sharedVisualState?.values || liveRoom.dice
-  );
+  const values = normalizeDice(liveRoom.dice);
   const poses = {
     ...((sharedVisualState?.poses && typeof sharedVisualState.poses === "object") ? sharedVisualState.poses : {}),
     ...((localVisualState?.poses && typeof localVisualState.poses === "object") ? localVisualState.poses : {}),
@@ -1923,11 +1918,7 @@ async function syncVisualDiceIfNeeded(room) {
   const diceSeed = Number(liveRoom.diceSeed || 0);
   const localVisualState = boardVisualDiceCache.get(roomKey);
   const sharedVisualState = getSharedVisualDiceState(liveRoom);
-  const actual = normalizeDice(
-    localVisualState?.diceSeed === diceSeed
-      ? localVisualState.values
-      : sharedVisualState?.values || liveRoom.dice
-  );
+  const actual = normalizeDice(liveRoom.dice);
   const mergedPoses = {
     ...((sharedVisualState?.poses && typeof sharedVisualState.poses === "object") ? sharedVisualState.poses : {}),
     ...((localVisualState?.poses && typeof localVisualState.poses === "object") ? localVisualState.poses : {}),
@@ -2459,12 +2450,7 @@ function mount(container, room) {
           Number(pose.position?.y || 0.42),
           posePlanar.z
         );
-        body.quaternion.set(
-          Number(pose.quaternion?.x || rollQ.x),
-          Number(pose.quaternion?.y || rollQ.y),
-          Number(pose.quaternion?.z || rollQ.z),
-          Number(pose.quaternion?.w || rollQ.w)
-        );
+        body.quaternion.set(rollQ.x, rollQ.y, rollQ.z, rollQ.w);
       } else {
         body.position.set(px, 0.42, pz);
         body.quaternion.set(rollQ.x, rollQ.y, rollQ.z, rollQ.w);
@@ -2680,7 +2666,7 @@ function mount(container, room) {
       });
       boardVisualDiceCache.set(poseCacheKey, {
         diceSeed: seedBase,
-        values: displayedValues,
+        values: normalizeDice(getLiveRoom().dice),
         poses: displayedPoses,
         updatedAtMs: Date.now(),
       });
@@ -2692,7 +2678,7 @@ function mount(container, room) {
       if (
         !rollingNow &&
         Number(getLiveRoom().rollCount || 0) > 0 &&
-        displayedValues.every((value) => Number(value || 0) === Number(displayedValues[0] || 0))
+        normalizeDice(getLiveRoom().dice).every((value, index, dice) => index === 0 || Number(value) === Number(dice[0]))
       ) {
         showYachtCelebration(container, poseCacheKey, seedBase);
       }
@@ -2711,11 +2697,11 @@ function mount(container, room) {
           } else if (now - stableRollSinceMs >= 320) {
             const payload = {
               roomId: liveRoom.id,
-              dice: displayedValues,
+              dice: normalizeDice(liveRoom.dice),
               diceSeed: seedBase,
               visualDiceState: {
                 diceSeed: seedBase,
-                values: displayedValues,
+                values: normalizeDice(liveRoom.dice),
                 poses: displayedPoses,
               },
             };
@@ -2759,10 +2745,9 @@ function mount(container, room) {
         poses: nextPoseCache,
         updatedAtMs: Date.now(),
       });
-      const currentVisualState = boardVisualDiceCache.get(poseCacheKey) || {};
       boardVisualDiceCache.set(poseCacheKey, {
         diceSeed: seedBase,
-        values: normalizeDice(currentVisualState.values || room.dice),
+        values: normalizeDice(getLiveRoom().dice || room.dice),
         poses: nextPoseCache,
         updatedAtMs: Date.now(),
       });
