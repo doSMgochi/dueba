@@ -25,6 +25,7 @@ html,
 body {
   max-width: 100%;
   overflow-x: hidden;
+  scrollbar-gutter: stable both-edges;
 }
 
 body {
@@ -37,6 +38,7 @@ body {
     radial-gradient(circle at right 18%, rgba(239, 35, 60, 0.12), transparent 18%),
     radial-gradient(circle at bottom, rgba(255, 255, 255, 0.03), transparent 28%),
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  overflow-y: scroll;
   scrollbar-width: thin;
   scrollbar-color: rgba(216, 80, 96, 0.55) rgba(255, 255, 255, 0.06);
 }
@@ -1994,6 +1996,119 @@ input {
   box-shadow: none;
 }
 
+.random-box-config {
+  display: grid;
+  gap: 12px;
+}
+
+.random-box-config.is-disabled {
+  opacity: 0.72;
+}
+
+.random-box-config-body {
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(216, 80, 96, 0.16);
+  background: linear-gradient(180deg, rgba(216, 80, 96, 0.06), rgba(255, 255, 255, 0.02));
+}
+
+.random-box-config-hint {
+  margin: 0;
+}
+
+.random-box-config-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.random-box-config .item-selector.is-disabled {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.random-box-reward-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.random-box-reward-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.random-box-reward-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(216, 80, 96, 0.12);
+}
+
+.random-box-reward-visual {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.random-box-reward-copy {
+  font-size: 13px;
+  color: rgba(245, 240, 234, 0.9);
+}
+
+.admin-random-box-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.random-box-admin-card {
+  min-width: 0;
+}
+
+.random-box-admin-head p {
+  margin: 6px 0 0;
+}
+
+.character-title-inline {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+  margin-right: 0.06em;
+  font-family: "Pretendard", "Noto Sans KR", sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.character-title-bracket {
+  display: inline-block;
+  margin: 0;
+  letter-spacing: -0.08em;
+  font-family: "Yu Gothic UI", "Meiryo", "Noto Sans JP", sans-serif;
+  font-weight: 900;
+  transform: scaleX(0.92);
+  transform-origin: center;
+}
+
+.character-title-bracket:first-child {
+  margin-left: -0.12em;
+  margin-right: 0.02em;
+}
+
+.character-title-bracket:last-child {
+  margin-left: 0.02em;
+  margin-right: -0.12em;
+}
+
+.character-name-core {
+  display: inline-block;
+}
+
 .item-selector {
   position: relative;
 }
@@ -2293,10 +2408,30 @@ input[type="number"] {
 }
 
 .profile-quick-modal-panel {
+  box-sizing: border-box;
   width: min(940px, 100%);
+  max-width: 100%;
+  height: auto;
+  max-height: calc(100dvh - 24px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: stable both-edges;
+  contain: layout paint;
+}
+
+#profile-quick-card {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
 .profile-quick-actions {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
@@ -2305,14 +2440,15 @@ input[type="number"] {
 }
 
 .profile-lobby-card {
+  --profile-card-scale: 1;
   --profile-card-visual-column: 240px;
   --profile-card-gap: 26px;
   --profile-card-padding: 30px;
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, var(--profile-card-visual-column)) minmax(0, 1fr);
-  gap: var(--profile-card-gap);
-  padding: var(--profile-card-padding);
+  grid-template-columns: minmax(0, calc(var(--profile-card-visual-column) * var(--profile-card-scale))) minmax(0, 1fr);
+  gap: calc(var(--profile-card-gap) * var(--profile-card-scale));
+  padding: calc(var(--profile-card-padding) * var(--profile-card-scale));
   border-radius: 30px;
   overflow: hidden;
   isolation: isolate;
@@ -2331,11 +2467,18 @@ input[type="number"] {
     linear-gradient(125deg, rgba(10, 10, 12, 0.99) 0%, rgba(22, 22, 28, 0.98) 24%, rgba(38, 31, 35, 0.97) 60%, rgba(70, 18, 25, 0.94) 100%);
   color: #ffffff;
   transition: box-shadow 240ms ease;
-  transform-origin: center center;
+  width: 836px;
+  max-width: none;
+  margin: 0;
+  transform-origin: top left;
   backface-visibility: hidden;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   min-height: 332px;
+  scrollbar-gutter: stable both-edges;
 }
 
 .profile-lobby-card:hover {
@@ -2346,9 +2489,35 @@ input[type="number"] {
 }
 
 .profile-card-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
   perspective: 2600px;
   perspective-origin: 50% 50%;
   transform-style: preserve-3d;
+  overflow: hidden;
+}
+
+.profile-card-scale-box {
+  position: relative;
+  flex: 0 0 auto;
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.profile-card-scale-shell {
+  position: relative;
+  width: 836px;
+  transform-origin: top left;
+  will-change: transform;
+  backface-visibility: hidden;
 }
 
 .profile-lobby-card-enter {
@@ -2423,7 +2592,7 @@ input[type="number"] {
 }
 
 .profile-lobby-card h2 {
-  font-size: clamp(28px, 4vw, 38px);
+  font-size: clamp(24px, calc(24px + 1vw), 38px);
   letter-spacing: 0.02em;
   text-shadow: 0 6px 16px rgba(0, 0, 0, 0.32);
 }
@@ -2480,6 +2649,12 @@ input[type="number"] {
   color: #ffffff;
 }
 
+.profile-lobby-card h2 .character-title-inline,
+.profile-lobby-card h2 .character-title-bracket,
+.profile-lobby-card h2 .character-name-core {
+  color: inherit !important;
+}
+
 .profile-lobby-visual {
   display: flex;
   align-items: center;
@@ -2492,7 +2667,7 @@ input[type="number"] {
 
 .profile-decoration-layer {
   position: absolute;
-  inset: 20px;
+  inset: calc(20px * var(--profile-card-scale));
   z-index: 5;
   pointer-events: none;
 }
@@ -2522,8 +2697,8 @@ input[type="number"] {
 .profile-decoration-image {
   width: auto;
   height: auto;
-  max-width: 48px;
-  max-height: 48px;
+  max-width: calc(48px * var(--profile-card-scale));
+  max-height: calc(48px * var(--profile-card-scale));
   object-fit: none;
   display: block;
   image-rendering: auto;
@@ -2535,10 +2710,10 @@ input[type="number"] {
 
 .profile-decoration-remove {
   position: absolute;
-  top: -12px;
-  right: -12px;
-  width: 24px;
-  height: 24px;
+  top: calc(-12px * var(--profile-card-scale));
+  right: calc(-12px * var(--profile-card-scale));
+  width: calc(24px * var(--profile-card-scale));
+  height: calc(24px * var(--profile-card-scale));
   border: 0;
   border-radius: 999px;
   padding: 0;
@@ -2547,7 +2722,7 @@ input[type="number"] {
   justify-content: center;
   background: rgba(22, 22, 24, 0.62);
   color: #f5f0ea;
-  font-size: 11px;
+  font-size: calc(11px * var(--profile-card-scale));
   font-weight: 700;
   line-height: 1;
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.32);
@@ -2560,13 +2735,13 @@ input[type="number"] {
 .profile-decoration-controls {
   position: absolute;
   left: 50%;
-  bottom: -34px;
+  bottom: calc(-34px * var(--profile-card-scale));
   transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 4px;
+  gap: calc(4px * var(--profile-card-scale));
+  padding: calc(4px * var(--profile-card-scale));
   border-radius: 999px;
   background: rgba(22, 22, 24, 0.56);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.28);
@@ -2576,14 +2751,14 @@ input[type="number"] {
 }
 
 .profile-decoration-controls button {
-  width: 26px;
-  height: 26px;
+  width: calc(26px * var(--profile-card-scale));
+  height: calc(26px * var(--profile-card-scale));
   border: 0;
   border-radius: 999px;
   background: rgba(245, 240, 234, 0.7);
   color: #57121a;
   font-weight: 900;
-  font-size: 14px;
+  font-size: calc(14px * var(--profile-card-scale));
   line-height: 1;
   text-align: center;
   cursor: pointer;
@@ -2606,7 +2781,7 @@ input[type="number"] {
 }
 
 .profile-seal-panel {
-  width: min(100%, 192px);
+  width: min(100%, calc(192px * var(--profile-card-scale)));
   aspect-ratio: 1 / 1;
   border-radius: 50%;
   background: transparent;
@@ -2624,7 +2799,7 @@ input[type="number"] {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  padding: 5px;
+  padding: calc(5px * var(--profile-card-scale));
   background:
     radial-gradient(circle at 50% 50%, transparent 72.2%, rgba(10, 9, 8, 0.92) 75.2%, transparent 75.9%),
     conic-gradient(
@@ -2662,8 +2837,8 @@ input[type="number"] {
 .profile-seal-art {
   position: relative;
   z-index: 1;
-  width: calc(100% - 12px);
-  height: calc(100% - 12px);
+  width: calc(100% - (12px * var(--profile-card-scale)));
+  height: calc(100% - (12px * var(--profile-card-scale)));
   object-fit: cover;
   border-radius: 50%;
   box-shadow:
@@ -2674,7 +2849,7 @@ input[type="number"] {
 .profile-seal-fallback {
   position: relative;
   z-index: 1;
-  font-size: 34px;
+  font-size: calc(34px * var(--profile-card-scale));
   font-weight: 700;
   letter-spacing: 0.12em;
   color: rgba(255, 240, 214, 0.84);
@@ -2682,7 +2857,7 @@ input[type="number"] {
 
 .profile-lobby-meta {
   display: grid;
-  gap: 16px;
+  gap: calc(16px * var(--profile-card-scale));
   position: relative;
   z-index: 3;
   padding-top: 6px;
@@ -2692,13 +2867,13 @@ input[type="number"] {
 .profile-lobby-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: calc(12px * var(--profile-card-scale));
 }
 
 .profile-lobby-grid div,
 .profile-lobby-traits {
-  padding: 13px 15px;
-  border-radius: 18px;
+  padding: calc(13px * var(--profile-card-scale)) calc(15px * var(--profile-card-scale));
+  border-radius: calc(18px * var(--profile-card-scale));
   background:
     linear-gradient(180deg, rgba(255, 241, 205, 0.05), rgba(255, 255, 255, 0.02)),
     rgba(255, 255, 255, 0.03);
@@ -2716,28 +2891,28 @@ input[type="number"] {
 .profile-lobby-grid span,
 .profile-lobby-traits span {
   display: block;
-  margin-bottom: 6px;
-  font-size: 12px;
+  margin-bottom: calc(6px * var(--profile-card-scale));
+  font-size: calc(12px * var(--profile-card-scale));
   opacity: 0.76;
 }
 
 .profile-lobby-grid strong,
 .profile-lobby-traits strong {
-  font-size: 15px;
+  font-size: calc(15px * var(--profile-card-scale));
   line-height: 1.5;
   letter-spacing: 0.01em;
 }
 
 .profile-lobby-traits {
-  min-height: 110px;
+  min-height: calc(110px * var(--profile-card-scale));
 }
 
 .profile-item-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: calc(10px * var(--profile-card-scale));
   align-items: center;
-  min-height: 44px;
+  min-height: calc(44px * var(--profile-card-scale));
 }
 
 .profile-item-chip {
@@ -2745,8 +2920,8 @@ input[type="number"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
+  width: calc(48px * var(--profile-card-scale));
+  height: calc(48px * var(--profile-card-scale));
   border-radius: 50%;
   background:
     linear-gradient(180deg, rgba(255, 241, 205, 0.07), rgba(255, 255, 255, 0.02)),
@@ -2758,47 +2933,26 @@ input[type="number"] {
 }
 
 @media (max-width: 760px) {
-  .profile-lobby-card {
-    --profile-card-visual-column: 170px;
-    --profile-card-gap: 16px;
-    --profile-card-padding: 20px;
-    grid-template-columns: minmax(150px, 0.9fr) minmax(0, 1.1fr);
-    align-items: center;
-    min-height: 0;
+  #profile-quick-modal.modal-backdrop {
+    place-items: center;
+    padding: 10px;
   }
 
-  .profile-lobby-visual {
-    padding-top: 0;
+  .profile-quick-modal-panel {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - 20px);
+    padding: 16px;
   }
+}
 
-  .profile-decoration-layer {
-    inset: 20px;
-    transform: none;
+@media (max-width: 560px) {
+  .profile-quick-modal-panel {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - 12px);
+    padding: 14px;
   }
-
-  .profile-seal-panel {
-    width: min(100%, 168px);
-  }
-
-  .profile-lobby-card h2 {
-    font-size: clamp(23px, 5.8vw, 31px);
-  }
-
-  .profile-lobby-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-  }
-
-  .profile-lobby-grid div,
-  .profile-lobby-traits {
-    padding: 11px 12px;
-    border-radius: 16px;
-  }
-
-  .profile-lobby-card .eyebrow {
-    margin-top: 0;
-  }
-
 }
 
 @media (prefers-reduced-motion: reduce) {

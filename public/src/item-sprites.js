@@ -4142,6 +4142,302 @@
         "path": "/assets/item-dots/도트배포_리프트라시르/화폐/여신의조각.png",
         "fallbackIcon": "🎁",
         "searchText": "화폐 여신의조각 도트배포_리프트라시르/화폐/여신의조각.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__동",
+        "label": "동",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/동.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 동 도트배포_리프트라시르/마작/동.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__남",
+        "label": "남",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/남.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 남 도트배포_리프트라시르/마작/남.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__서",
+        "label": "서",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/서.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 서 도트배포_리프트라시르/마작/서.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__북",
+        "label": "북",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/북.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 북 도트배포_리프트라시르/마작/북.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__백",
+        "label": "백",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/백.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 백 도트배포_리프트라시르/마작/백.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__발",
+        "label": "발",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/발.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 발 도트배포_리프트라시르/마작/발.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__중",
+        "label": "중",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/중.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 중 도트배포_리프트라시르/마작/중.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__1만",
+        "label": "1만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/1만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 1만 도트배포_리프트라시르/마작/1만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__2만",
+        "label": "2만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/2만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 2만 도트배포_리프트라시르/마작/2만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__3만",
+        "label": "3만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/3만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 3만 도트배포_리프트라시르/마작/3만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__4만",
+        "label": "4만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/4만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 4만 도트배포_리프트라시르/마작/4만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__5만",
+        "label": "5만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/5만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 5만 도트배포_리프트라시르/마작/5만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__6만",
+        "label": "6만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/6만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 6만 도트배포_리프트라시르/마작/6만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__7만",
+        "label": "7만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/7만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 7만 도트배포_리프트라시르/마작/7만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__8만",
+        "label": "8만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/8만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 8만 도트배포_리프트라시르/마작/8만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__9만",
+        "label": "9만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/9만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 9만 도트배포_리프트라시르/마작/9만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__1통",
+        "label": "1통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/1통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 1통 도트배포_리프트라시르/마작/1통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__2통",
+        "label": "2통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/2통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 2통 도트배포_리프트라시르/마작/2통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__3통",
+        "label": "3통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/3통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 3통 도트배포_리프트라시르/마작/3통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__4통",
+        "label": "4통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/4통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 4통 도트배포_리프트라시르/마작/4통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__5통",
+        "label": "5통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/5통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 5통 도트배포_리프트라시르/마작/5통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__6통",
+        "label": "6통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/6통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 6통 도트배포_리프트라시르/마작/6통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__7통",
+        "label": "7통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/7통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 7통 도트배포_리프트라시르/마작/7통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__8통",
+        "label": "8통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/8통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 8통 도트배포_리프트라시르/마작/8통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__9통",
+        "label": "9통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/9통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 9통 도트배포_리프트라시르/마작/9통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__1삭",
+        "label": "1삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/1삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 1삭 도트배포_리프트라시르/마작/1삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__2삭",
+        "label": "2삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/2삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 2삭 도트배포_리프트라시르/마작/2삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__3삭",
+        "label": "3삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/3삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 3삭 도트배포_리프트라시르/마작/3삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__4삭",
+        "label": "4삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/4삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 4삭 도트배포_리프트라시르/마작/4삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__5삭",
+        "label": "5삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/5삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 5삭 도트배포_리프트라시르/마작/5삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__6삭",
+        "label": "6삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/6삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 6삭 도트배포_리프트라시르/마작/6삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__7삭",
+        "label": "7삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/7삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 7삭 도트배포_리프트라시르/마작/7삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__8삭",
+        "label": "8삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/8삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 8삭 도트배포_리프트라시르/마작/8삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__9삭",
+        "label": "9삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/9삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 9삭 도트배포_리프트라시르/마작/9삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__아카5만",
+        "label": "아카5만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/아카5만.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 아카5만 도트배포_리프트라시르/마작/아카5만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__아카5삭",
+        "label": "아카5삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/아카5삭.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 아카5삭 도트배포_리프트라시르/마작/아카5삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__아카5통",
+        "label": "아카5통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/아카5통.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 아카5통 도트배포_리프트라시르/마작/아카5통.png"
     }
 ];
 
@@ -4195,8 +4491,10 @@ export const ITEM_COLOR_PRESETS = [
 ];
 const itemColorPresetMap = new Map(ITEM_COLOR_PRESETS.map((preset) => [preset.id, preset]));
 const removedSpriteCategories = new Set(["스킬", "클래스", "스킬,클래스"]);
-const primaryItemCategories = ["소모품", "기타 아이템", "치장 아이템", "프로필 꾸미기", "음식", "생물", "화폐", "커스텀"];
+const primaryItemCategories = ["소모품", "기타 아이템", "치장 아이템", "프로필 꾸미기", "음식", "생물", "화폐", "마작", "커스텀"];
 const CUSTOM_ITEM_SPRITE_STORAGE_KEY = "dueba.custom-item-sprites.v1";
+const ITEM_DOT_STORAGE_BUCKET = "dueba-cbfd4.firebasestorage.app";
+const ITEM_DOT_STORAGE_TOKEN = "dueba-item-dots-v1";
 const categoryAliasMap = new Map([
   ["권한", "소모품"],
   ["광물", "화폐"],
@@ -4216,6 +4514,7 @@ const categoryAliasMap = new Map([
   ["프로필 꾸미기", "프로필 꾸미기"],
   ["음식", "음식"],
   ["화폐", "화폐"],
+  ["마작", "마작"],
   ["커스텀", "커스텀"],
 ]);
 const visibleItemSpriteCatalog = itemSpriteCatalog.filter((item) => !removedSpriteCategories.has(String(item.category || "").trim()));
@@ -4358,11 +4657,15 @@ export function getItemSpriteUrl(spriteOrPath) {
   if (/^(https?:|data:|blob:)/i.test(String(path || ""))) {
     return String(path || "");
   }
-  return encodeAssetPath(path);
+  return mapItemDotAssetPathToStorageUrl(path) || encodeAssetPath(path);
 }
 
 export function getItemSpriteCategory(spriteKey) {
-  return normalizeSpriteCategory(getItemSprite(spriteKey)?.category || "기타 아이템");
+  const spriteCategory = String(getItemSprite(spriteKey)?.category || "").trim() || "기타 아이템";
+  if (spriteCategory === "마작") {
+    return "프로필 꾸미기";
+  }
+  return normalizeSpriteCategory(spriteCategory);
 }
 
 export function registerCustomItemSprite({ url, label = "" } = {}) {
@@ -4415,7 +4718,7 @@ function loadCustomItemSpriteCatalog() {
     const raw = window.localStorage.getItem(CUSTOM_ITEM_SPRITE_STORAGE_KEY);
     const parsed = JSON.parse(raw || "[]");
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const catalog = parsed
       .map((item) => {
         const path = String(item?.path || "").trim();
         const key = String(item?.key || "").trim() || (path ? `custom:${path}` : "");
@@ -4430,7 +4733,15 @@ function loadCustomItemSpriteCatalog() {
           searchText: `커스텀 ${label} ${path}`.toLowerCase(),
         };
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter((item) => {
+        const searchable = `${String(item?.label || "").trim()} ${String(item?.path || "").trim()}`;
+        return searchable.includes("날개");
+      });
+    if (catalog.length !== parsed.length) {
+      persistCustomItemSpriteCatalog(catalog);
+    }
+    return catalog;
   } catch {
     return [];
   }
@@ -4472,6 +4783,15 @@ function encodeAssetPath(path) {
     .split("/")
     .map((segment, index) => (index === 0 ? segment : encodeURIComponent(segment)))
     .join("/");
+}
+
+function mapItemDotAssetPathToStorageUrl(path) {
+  const normalizedPath = String(path || "").trim();
+  if (!normalizedPath.startsWith("/assets/item-dots/")) {
+    return "";
+  }
+  const objectPath = normalizedPath.replace(/^\//, "");
+  return `https://firebasestorage.googleapis.com/v0/b/${ITEM_DOT_STORAGE_BUCKET}/o/${encodeURIComponent(objectPath)}?alt=media&token=${ITEM_DOT_STORAGE_TOKEN}`;
 }
 
 function escapeHtml(value) {

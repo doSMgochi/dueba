@@ -86,6 +86,10 @@ const boardPoseCache = new Map();
 const boardVisualDiceCache = new Map();
 let boardVisualSyncKey = "";
 let boardVisualSyncPromise = null;
+let boardVisualPreviewSyncKey = "";
+let boardVisualPreviewSyncPromise = null;
+let boardVisualPreviewSentAtMs = 0;
+let boardVisualPreviewSignature = "";
 let boardViewSignature = "";
 let boardMountRequestId = 0;
 const holdRequestKeys = new Set();
@@ -94,7 +98,6 @@ const renderedYachtEmoteEventIds = new Set();
 const yachtSfxAudio = new Map();
 const yachtSfxLooping = new Map();
 const yachtCollisionAudioContexts = new Set();
-let yachtShakeLoopTimeoutId = 0;
 let yachtSfxUnlocked = false;
 let yachtScoreFeedback = null;
 let yachtEmoteCooldownUntilMs = 0;
@@ -128,8 +131,6 @@ function isYachtSfxAudible(settings = readYachtSfxSettings()) {
 }
 
 function stopAllYachtSfx() {
-  window.clearTimeout(yachtShakeLoopTimeoutId);
-  yachtShakeLoopTimeoutId = 0;
   yachtSfxLooping.forEach((audio) => {
     audio.pause();
     try {
@@ -237,20 +238,10 @@ function startYachtSfxLoop(key) {
   if (!isYachtSfxAudible(settings) || !yachtSfxUnlocked) return;
   if (yachtSfxLooping.has(key)) return;
   const audio = playYachtSfx(key, { loop: true });
-  if (audio) {
-    yachtSfxLooping.set(key, audio);
-    if (key === "shake") {
-      window.clearTimeout(yachtShakeLoopTimeoutId);
-      yachtShakeLoopTimeoutId = window.setTimeout(stopYachtShakeSfx, 1400);
-    }
-  }
+  if (audio) yachtSfxLooping.set(key, audio);
 }
 
 function stopYachtSfxLoop(key) {
-  if (key === "shake") {
-    window.clearTimeout(yachtShakeLoopTimeoutId);
-    yachtShakeLoopTimeoutId = 0;
-  }
   const audio = yachtSfxLooping.get(key);
   if (!audio) return;
   audio.pause();
@@ -379,6 +370,10 @@ export function cleanupYachtModule() {
   stopAllYachtSfx();
   boardVisualSyncKey = "";
   boardVisualSyncPromise = null;
+  boardVisualPreviewSyncKey = "";
+  boardVisualPreviewSyncPromise = null;
+  boardVisualPreviewSentAtMs = 0;
+  boardVisualPreviewSignature = "";
   boardViewSignature = "";
   boardMountRequestId = 0;
   yachtActionUnauthorized = false;
@@ -482,7 +477,15 @@ function renderYachtRoot() {
 
   if (!yachtState.room) {
     yachtState.onToast?.forceHide?.();
-    root.innerHTML = renderLobbyView();
+    const currentLobbyView = root.querySelector("[data-yacht-lobby-view]");
+    if (!currentLobbyView) {
+      root.innerHTML = renderLobbyView();
+    } else {
+      const roomList = currentLobbyView.querySelector("[data-yacht-room-list]");
+      if (roomList) {
+        roomList.innerHTML = renderLobbyRoomCards();
+      }
+    }
     bindLobbyEvents();
     return;
   }
@@ -513,7 +516,7 @@ function renderYachtRoot() {
 
 function renderLobbyView() {
   return `
-    <div class="yacht-lobby-center">
+    <div class="yacht-lobby-center" data-yacht-lobby-view="true">
       <article class="content-card yacht-card yacht-lobby-panel">
         <div class="yacht-lobby-head">
           <div>
@@ -527,7 +530,7 @@ function renderLobbyView() {
           </div>
         </div>
 
-        <div class="stack-list">
+        <div class="stack-list" data-yacht-room-list>
           ${renderLobbyRoomCards()}
         </div>
       </article>
@@ -793,24 +796,33 @@ function renderFinishedRoomView(room) {
 }
 
 function bindLobbyEvents() {
-  document.querySelector("#yacht-create-button")?.addEventListener("click", async () => {
-    try {
-      await withPendingToast(async () => {
-        const roomId = await createRoom(createRandomRoomCode());
-        await setActiveRoom(roomId, "player");
-      });
-      yachtState.onToast?.("\ubc29\uc744 \ub9cc\ub4e4\uc5c8\uc2b5\ub2c8\ub2e4.");
-    } catch (error) {
-      yachtState.onToast?.(error.message, true);
-    }
-  });
-
-  document.querySelector("#yacht-refresh-button")?.addEventListener("click", () => {
-    renderYachtRoot();
-    yachtState.onToast?.("\ubc29 \ubaa9\ub85d\uc744 \uc0c8\ub85c\uace0\uce68\ud588\uc2b5\ub2c8\ub2e4.");
-  });
+  const createButton = document.querySelector("#yacht-create-button");
+  if (createButton && !createButton.dataset.yachtBound) {
+    createButton.dataset.yachtBound = "1";
+    createButton.addEventListener("click", async () => {
+      try {
+        await withPendingToast(async () => {
+          const roomId = await createRoom(createRandomRoomCode());
+          await setActiveRoom(roomId, "player");
+        });
+        yachtState.onToast?.("\ubc29\uc744 \ub9cc\ub4e4\uc5c8\uc2b5\ub2c8\ub2e4.");
+      } catch (error) {
+        yachtState.onToast?.(error.message, true);
+      }
+    });
+  }
+  const refreshButton = document.querySelector("#yacht-refresh-button");
+  if (refreshButton && !refreshButton.dataset.yachtBound) {
+    refreshButton.dataset.yachtBound = "1";
+    refreshButton.addEventListener("click", () => {
+      renderYachtRoot();
+      yachtState.onToast?.("\ubc29 \ubaa9\ub85d\uc744 \uc0c8\ub85c\uace0\uce68\ud588\uc2b5\ub2c8\ub2e4.");
+    });
+  }
 
   document.querySelectorAll("[data-yacht-join]").forEach((button) => {
+    if (button.dataset.yachtBound) return;
+    button.dataset.yachtBound = "1";
     button.addEventListener("click", async () => {
       try {
         await withPendingToast(async () => {
@@ -825,6 +837,8 @@ function bindLobbyEvents() {
   });
 
   document.querySelectorAll("[data-yacht-spectate]").forEach((button) => {
+    if (button.dataset.yachtBound) return;
+    button.dataset.yachtBound = "1";
     button.addEventListener("click", async () => {
       try {
         await withPendingToast(async () => {
@@ -994,9 +1008,9 @@ function bindPlayingRoomEvents(room) {
     rollButton.addEventListener("touchend", stopYachtShakeSfx, { passive: true });
     rollButton.addEventListener("touchcancel", stopYachtShakeSfx, { passive: true });
     rollButton.addEventListener("contextmenu", (event) => event.preventDefault());
-    rollButton.addEventListener("pointerdown", (event) => {
+    rollButton.addEventListener("pointerdown", () => {
       unlockYachtAudio();
-      if (event.pointerType === "mouse") startYachtSfxLoop("shake");
+      startYachtSfxLoop("shake");
     });
     rollButton.addEventListener("click", async () => {
     try {
@@ -1483,6 +1497,20 @@ function resolveScoreCellText(player, rowId, dice = [], viewerUid = "", canPrevi
 }
 
 function getDisplayedDiceValues(room) {
+  const roomKey = String(room?.id || "");
+  const diceSeed = Number(room?.diceSeed || 0);
+  const localVisualState = boardVisualDiceCache.get(roomKey);
+  if (
+    canUseLocalVisualDiceState(room) &&
+    localVisualState?.diceSeed === diceSeed &&
+    Array.isArray(localVisualState.values)
+  ) {
+    return normalizeDice(localVisualState.values);
+  }
+  const sharedVisualState = getSharedVisualDiceState(room);
+  if (Array.isArray(sharedVisualState?.values)) {
+    return normalizeDice(sharedVisualState.values);
+  }
   return normalizeDice(room?.dice);
 }
 
@@ -1567,7 +1595,11 @@ function buildLocalVisualDiceStatePayload(room) {
   const diceSeed = Number(liveRoom.diceSeed || 0);
   const localVisualState = boardVisualDiceCache.get(roomKey);
   const sharedVisualState = getSharedVisualDiceState(liveRoom);
-  const values = normalizeDice(liveRoom.dice);
+  const values = normalizeDice(
+    localVisualState?.diceSeed === diceSeed && Array.isArray(localVisualState.values)
+      ? localVisualState.values
+      : sharedVisualState?.values || liveRoom.dice
+  );
   const poses = {
     ...((sharedVisualState?.poses && typeof sharedVisualState.poses === "object") ? sharedVisualState.poses : {}),
     ...((localVisualState?.poses && typeof localVisualState.poses === "object") ? localVisualState.poses : {}),
@@ -1863,7 +1895,6 @@ async function mountPhysicsBoard(room) {
     dice: normalizeDice(room.dice),
     heldDice: Array.isArray(room.heldDice) ? room.heldDice.slice(0, YACHT_DICE_COUNT).map(Boolean) : [],
     diceMotion: room.diceMotion || null,
-    visualDiceState: room.visualDiceState || null,
   });
   if (boardViewSignature === nextSignature && typeof boardViewCleanup === "function") {
     return;
@@ -1918,7 +1949,11 @@ async function syncVisualDiceIfNeeded(room) {
   const diceSeed = Number(liveRoom.diceSeed || 0);
   const localVisualState = boardVisualDiceCache.get(roomKey);
   const sharedVisualState = getSharedVisualDiceState(liveRoom);
-  const actual = normalizeDice(liveRoom.dice);
+  const actual = normalizeDice(
+    localVisualState?.diceSeed === diceSeed
+      ? localVisualState.values
+      : sharedVisualState?.values || liveRoom.dice
+  );
   const mergedPoses = {
     ...((sharedVisualState?.poses && typeof sharedVisualState.poses === "object") ? sharedVisualState.poses : {}),
     ...((localVisualState?.poses && typeof localVisualState.poses === "object") ? localVisualState.poses : {}),
@@ -1965,6 +2000,62 @@ async function syncVisualDiceIfNeeded(room) {
   })();
 
   return boardVisualSyncPromise;
+}
+
+async function syncRollingVisualPreview(room, values, poses) {
+  const liveRoom = yachtState.room && String(yachtState.room.id || "") === String(room?.id || "") ? yachtState.room : room;
+  if (!liveRoom || String(liveRoom.status || "") !== ROOM_STATUS_PLAYING) return false;
+  if (String(liveRoom.actionPhase || "") !== PHASE_ROLLING) return false;
+  if (!canCurrentUserRoll(liveRoom, yachtState.profile?.uid)) return false;
+
+  const roomKey = String(liveRoom.id || "");
+  const diceSeed = Number(liveRoom.diceSeed || 0);
+  const previewSignature = JSON.stringify({
+    values: normalizeDice(values),
+    poses,
+  });
+  const syncKey = `${roomKey}:${diceSeed}`;
+  const now = Date.now();
+  if (boardVisualPreviewSyncPromise && boardVisualPreviewSyncKey === syncKey) {
+    return boardVisualPreviewSyncPromise;
+  }
+  if (boardVisualPreviewSignature === previewSignature && now - boardVisualPreviewSentAtMs < 120) {
+    return false;
+  }
+  if (now - boardVisualPreviewSentAtMs < 120) {
+    return false;
+  }
+
+  boardVisualPreviewSyncKey = syncKey;
+  boardVisualPreviewSignature = previewSignature;
+  boardVisualPreviewSentAtMs = now;
+  boardVisualPreviewSyncPromise = (async () => {
+    try {
+      await callYachtAction("sync-visual-state", {
+        roomId: liveRoom.id,
+        diceSeed,
+        previewOnly: true,
+        visualDiceState: {
+          diceSeed,
+          values: normalizeDice(values),
+          poses,
+        },
+      });
+      return true;
+    } catch (error) {
+      if (isIgnorableVisualSyncError(error)) {
+        return false;
+      }
+      throw error;
+    } finally {
+      if (boardVisualPreviewSyncKey === syncKey) {
+        boardVisualPreviewSyncKey = "";
+        boardVisualPreviewSyncPromise = null;
+      }
+    }
+  })();
+
+  return boardVisualPreviewSyncPromise;
 }
 
 function createBoardEngine(THREE, CANNON, RoundedBox) {
@@ -2450,7 +2541,12 @@ function mount(container, room) {
           Number(pose.position?.y || 0.42),
           posePlanar.z
         );
-        body.quaternion.set(rollQ.x, rollQ.y, rollQ.z, rollQ.w);
+        body.quaternion.set(
+          Number(pose.quaternion?.x || rollQ.x),
+          Number(pose.quaternion?.y || rollQ.y),
+          Number(pose.quaternion?.z || rollQ.z),
+          Number(pose.quaternion?.w || rollQ.w)
+        );
       } else {
         body.position.set(px, 0.42, pz);
         body.quaternion.set(rollQ.x, rollQ.y, rollQ.z, rollQ.w);
@@ -2546,6 +2642,11 @@ function mount(container, room) {
       lastTime = now;
 
       const rollingNow = isCurrentlyRolling();
+      const liveRoom = getLiveRoom();
+      const currentTurnUid = String(getCurrentTurnPlayer(liveRoom)?.uid || "");
+      const viewerUid = String(yachtState.profile?.uid || "");
+      const isCurrentTurnPlayer = Boolean(viewerUid) && viewerUid === currentTurnUid;
+      const liveSharedVisualState = getSharedVisualDiceState(liveRoom);
 
       if (rollingNow && now < rollEndMs) {
         world.step(1 / 60, dt, 5);
@@ -2612,6 +2713,22 @@ function mount(container, room) {
       }
 
       diceSet.forEach((die) => {
+        const sharedPose = !isCurrentTurnPlayer && rollingNow ? liveSharedVisualState?.poses?.[die.dieIndex] : null;
+        if (sharedPose?.position && sharedPose?.quaternion) {
+          die.body.position.set(
+            Number(sharedPose.position.x || 0),
+            Number(sharedPose.position.y || 0.42),
+            Number(sharedPose.position.z || 0)
+          );
+          die.body.quaternion.set(
+            Number(sharedPose.quaternion.x || 0),
+            Number(sharedPose.quaternion.y || 0),
+            Number(sharedPose.quaternion.z || 0),
+            Number(sharedPose.quaternion.w || 1)
+          );
+          die.body.velocity.set(0, 0, 0);
+          die.body.angularVelocity.set(0, 0, 0);
+        }
         if (die.body.position.y > 1.55) {
           die.body.position.y = 1.55;
           if (die.body.velocity.y > 0) die.body.velocity.y = 0;
@@ -2625,7 +2742,7 @@ function mount(container, room) {
       });
 
       renderer.render(scene, camera);
-      const displayedValues = normalizeDice(getLiveRoom().dice);
+      const displayedValues = normalizeDice(liveRoom.dice);
       const displayedPoses = {
         ...cachedPoses,
       };
@@ -2638,9 +2755,15 @@ function mount(container, room) {
           die.body.quaternion.z,
           die.body.quaternion.w
         );
-        const topFace = readTopFaceValue(currentQuaternion);
-        displayedValues[die.dieIndex] = topFace.value;
-        displayedAlignments[die.dieIndex] = topFace.alignment;
+        const sharedValue = !isCurrentTurnPlayer && rollingNow ? Number(liveSharedVisualState?.values?.[die.dieIndex] || 0) : 0;
+        if (sharedValue >= 1 && sharedValue <= 6) {
+          displayedValues[die.dieIndex] = sharedValue;
+          displayedAlignments[die.dieIndex] = 1;
+        } else {
+          const topFace = readTopFaceValue(currentQuaternion);
+          displayedValues[die.dieIndex] = topFace.value;
+          displayedAlignments[die.dieIndex] = topFace.alignment;
+        }
         maxMotion = Math.max(
           maxMotion,
           Math.abs(die.body.velocity.x),
@@ -2666,7 +2789,7 @@ function mount(container, room) {
       });
       boardVisualDiceCache.set(poseCacheKey, {
         diceSeed: seedBase,
-        values: normalizeDice(getLiveRoom().dice),
+        values: displayedValues,
         poses: displayedPoses,
         updatedAtMs: Date.now(),
       });
@@ -2675,21 +2798,13 @@ function mount(container, room) {
         poses: displayedPoses,
         updatedAtMs: Date.now(),
       });
-      if (
-        !rollingNow &&
-        Number(getLiveRoom().rollCount || 0) > 0 &&
-        normalizeDice(getLiveRoom().dice).every((value, index, dice) => index === 0 || Number(value) === Number(dice[0]))
-      ) {
-        showYachtCelebration(container, poseCacheKey, seedBase);
-      }
-
       if (rollingNow && !rollFinalizePromise && !document.hidden) {
-        const liveRoom = getLiveRoom();
-        const isCurrentTurnPlayer =
-          String(getCurrentTurnPlayer(liveRoom)?.uid || "") === String(yachtState.profile?.uid || "");
         const valuesSignature = JSON.stringify(displayedValues);
         const allReadable = displayedAlignments.every((alignment) => Number(alignment || 0) >= 0.68);
         const isSettled = maxMotion < 0.18 && allReadable;
+        if (isCurrentTurnPlayer) {
+          void syncRollingVisualPreview(liveRoom, displayedValues, displayedPoses).catch(() => {});
+        }
         if (isCurrentTurnPlayer && isSettled) {
           if (stableRollSignature !== valuesSignature) {
             stableRollSignature = valuesSignature;
@@ -2697,11 +2812,11 @@ function mount(container, room) {
           } else if (now - stableRollSinceMs >= 320) {
             const payload = {
               roomId: liveRoom.id,
-              dice: normalizeDice(liveRoom.dice),
+              dice: displayedValues,
               diceSeed: seedBase,
               visualDiceState: {
                 diceSeed: seedBase,
-                values: normalizeDice(liveRoom.dice),
+                values: displayedValues,
                 poses: displayedPoses,
               },
             };
@@ -2745,9 +2860,10 @@ function mount(container, room) {
         poses: nextPoseCache,
         updatedAtMs: Date.now(),
       });
+      const currentVisualState = boardVisualDiceCache.get(poseCacheKey) || {};
       boardVisualDiceCache.set(poseCacheKey, {
         diceSeed: seedBase,
-        values: normalizeDice(getLiveRoom().dice || room.dice),
+        values: normalizeDice(currentVisualState.values || room.dice),
         poses: nextPoseCache,
         updatedAtMs: Date.now(),
       });

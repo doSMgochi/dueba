@@ -38,6 +38,8 @@ const uploadItemDotImageCallable = httpsCallable(functions, "uploadItemDotImage"
 const adminDeleteUserCallable = httpsCallable(functions, "adminDeleteUser");
 const createItemDefinitionCallable = httpsCallable(functions, "createItemDefinition");
 const updateItemDefinitionCallable = httpsCallable(functions, "updateItemDefinition");
+const ensureMahjongProfileItemsCallable = httpsCallable(functions, "ensureMahjongProfileItems");
+const clearProfileTitleCallable = httpsCallable(functions, "clearProfileTitle");
 const deleteItemDefinitionCallable = httpsCallable(functions, "deleteItemDefinition");
 const createAnnouncementCallable = httpsCallable(functions, "createAnnouncement");
 const purchaseShopItemCallable = httpsCallable(functions, "purchaseShopItem");
@@ -506,6 +508,8 @@ export async function getRankingBoard() {
           uid: data.uid || "",
           characterName: data.characterName || item.id,
           nickname: data.nickname || "-",
+          profileTitle: String(data.profileTitle || "").trim(),
+          characterNameColorPreset: String(data.characterNameColorPreset || "").trim(),
           rankingPoints: Number(data.rankingPoints || 0),
           currency: Number(data.currency || 0),
           factionName: String(data.factionName || "").trim(),
@@ -580,6 +584,24 @@ export async function createItemDefinition(payload) {
 export async function updateItemDefinition(payload) {
   try {
     const result = await updateItemDefinitionCallable(payload);
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function ensureMahjongProfileItems() {
+  try {
+    const result = await ensureMahjongProfileItemsCallable();
+    return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function clearProfileTitle() {
+  try {
+    const result = await clearProfileTitleCallable();
     return result.data;
   } catch (error) {
     throw toFriendlyError(error);

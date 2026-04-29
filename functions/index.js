@@ -264,6 +264,8 @@ exports.getRankingBoard = onCall(async (request) => {
       return {
         characterName: data.characterName || item.id,
         nickname: data.nickname || "-",
+        profileTitle: String(data.profileTitle || "").trim(),
+        characterNameColorPreset: String(data.characterNameColorPreset || "").trim(),
         rankingPoints: Number(data.rankingPoints || 0),
         currency: Number(data.currency || 0),
         factionName: String(data.factionName || "").trim(),
@@ -517,6 +519,7 @@ exports.createItemDefinition = onCall(async (request) => {
     colorPreset = "",
     category = "기타 아이템",
     foodCurrencyReward = 0,
+    randomBoxRewardItemIds = [],
     price = 0,
     sellInShop = true,
   } = request.data || {};
@@ -532,6 +535,10 @@ exports.createItemDefinition = onCall(async (request) => {
   const normalizedCategory = normalizeItemCategory(category);
   const normalizedFoodCurrencyReward =
     normalizedCategory === "음식" ? Math.max(0, Math.floor(Number(foodCurrencyReward || 0))) : 0;
+  const useConfig = buildItemUseConfig({
+    itemName: normalizedName,
+    randomBoxRewardItemIds,
+  });
 
   await db.collection("item-db").doc(itemId).set(
     {
@@ -543,6 +550,7 @@ exports.createItemDefinition = onCall(async (request) => {
       colorPreset: String(colorPreset || "").trim(),
       category: normalizedCategory,
       foodCurrencyReward: normalizedFoodCurrencyReward,
+      useConfig,
       sellInShop: shouldSellInShop,
       sortOrder: Date.now(),
       createdAt: FieldValue.serverTimestamp(),
@@ -560,6 +568,7 @@ exports.createItemDefinition = onCall(async (request) => {
         colorPreset: String(colorPreset || "").trim(),
         category: normalizedCategory,
         foodCurrencyReward: normalizedFoodCurrencyReward,
+        useConfig,
         price: normalizedPrice,
         sortOrder: Date.now(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -587,6 +596,7 @@ exports.updateItemDefinition = onCall(async (request) => {
     colorPreset = "",
     category = "기타 아이템",
     foodCurrencyReward = 0,
+    randomBoxRewardItemIds = [],
     price = 0,
     sellInShop = true,
   } = request.data || {};
@@ -615,6 +625,10 @@ exports.updateItemDefinition = onCall(async (request) => {
   const normalizedColorPreset = String(colorPreset || "").trim();
   const normalizedFoodCurrencyReward =
     normalizedCategory === "음식" ? Math.max(0, Math.floor(Number(foodCurrencyReward || 0))) : 0;
+  const useConfig = buildItemUseConfig({
+    itemName: normalizedName,
+    randomBoxRewardItemIds,
+  });
 
   await itemRef.update({
     name: normalizedName,
@@ -625,6 +639,7 @@ exports.updateItemDefinition = onCall(async (request) => {
     colorPreset: normalizedColorPreset,
     category: normalizedCategory,
     foodCurrencyReward: normalizedFoodCurrencyReward,
+    useConfig,
     sellInShop: shouldSellInShop,
     updatedAt: FieldValue.serverTimestamp(),
   });
@@ -640,6 +655,7 @@ exports.updateItemDefinition = onCall(async (request) => {
         colorPreset: normalizedColorPreset,
         category: normalizedCategory,
         foodCurrencyReward: normalizedFoodCurrencyReward,
+        useConfig,
         price: normalizedPrice,
         sellInShop: true,
         updatedAt: FieldValue.serverTimestamp(),
@@ -822,6 +838,52 @@ exports.updateItemDefinition = onCall(async (request) => {
   );
 
   return { ok: true, itemId: normalizedItemId };
+});
+
+exports.ensureMahjongProfileItems = onCall(async (request) => {
+  assertAuthenticated(request);
+  await assertAdmin(request.auth.uid);
+
+  const itemDefinitions = buildMahjongProfileItemDefinitions();
+  let createdCount = 0;
+
+  for (let index = 0; index < itemDefinitions.length; index += 1) {
+    const definition = itemDefinitions[index];
+    const itemId = buildItemId(definition.name);
+    const itemRef = db.collection("item-db").doc(itemId);
+    const existingSnapshot = await itemRef.get();
+    if (existingSnapshot.exists) {
+      continue;
+    }
+
+    await itemRef.set(
+      {
+        name: definition.name,
+        description: "",
+        shortLabel: definition.shortLabel,
+        icon: "🀄",
+        spriteKey: definition.spriteKey,
+        colorPreset: "",
+        category: "프로필 꾸미기",
+        foodCurrencyReward: 0,
+        useConfig: {},
+        sellInShop: false,
+        sortOrder: Date.now() + index,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    await db.collection("shop").doc(itemId).delete().catch(() => null);
+    createdCount += 1;
+  }
+
+  return {
+    ok: true,
+    createdCount,
+    totalCount: itemDefinitions.length,
+  };
 });
 
 exports.deleteItemDefinition = onCall(async (request) => {
@@ -1316,8 +1378,27 @@ exports.useInventoryItem = onCall(async (request) => {
   let createdDecoration = null;
   let grantedCurrency = 0;
   let stolenItem = null;
+  let grantedItem = null;
   const normalizedItemName = normalizeSystemItemName(usedItem?.name || itemDefinition?.name || "");
+  const randomBoxType = getRandomBoxTypeByName(normalizedItemName);
+  const titleText = extractProfileTitleText(normalizedItemName);
+  const randomBoxRewardIds = normalizeRandomBoxRewardItemIds(useConfig.randomBoxRewardItemIds);
+  let randomBoxRewardPool = [];
+  if (randomBoxType && randomBoxRewardIds.length) {
+    randomBoxRewardPool = (
+      await Promise.all(
+        randomBoxRewardIds.map(async (rewardItemId) => {
+          const snapshot = await db.collection("item-db").doc(rewardItemId).get();
+          return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
+        })
+      )
+    ).filter(Boolean);
+  }
   const shouldConsumeItem = normalizedItemName !== "금고";
+
+  if (randomBoxType && !randomBoxRewardPool.length) {
+    throw new HttpsError("failed-precondition", `${randomBoxType} 랜덤박스에 등록된 보상이 없습니다.`);
+  }
 
   if (shouldConsumeItem) {
     nextInventory.splice(itemIndex, 1);
@@ -1345,7 +1426,47 @@ exports.useInventoryItem = onCall(async (request) => {
   }
 
   const profileUpdates = {};
-  if (normalizedItemName === "낡은 차광포") {
+  if (randomBoxType) {
+    const selectedReward = randomBoxRewardPool[Math.floor(Math.random() * randomBoxRewardPool.length)];
+    grantedItem = buildInventoryItemFromDefinition(selectedReward);
+    nextInventory.push(grantedItem);
+    effectDescription = `${randomBoxType} 랜덤박스를 열어 ${grantedItem.name}을(를) 획득했습니다.`;
+  } else if (normalizedItemName === "염색약") {
+    const nextColorPreset = pickRandomCharacterNameColorPreset();
+    if (!nextColorPreset) {
+      throw new HttpsError("failed-precondition", "사용 가능한 이름 색상 팔레트가 없습니다.");
+    }
+    profileUpdates.characterNameColorPreset = nextColorPreset;
+    effectDescription = `캐릭터 이름 색상이 ${getCharacterNameColorLabel(nextColorPreset)} 톤으로 바뀌었습니다.`;
+  } else if (titleText) {
+    const currentTitle = String(userData.profileTitle || "").trim();
+    if (currentTitle) {
+      const previousTitleItemId = String(userData.profileTitleItemId || "").trim();
+      const previousTitleItemName = String(userData.profileTitleItemName || `칭호:${currentTitle}`).trim();
+      const previousTitleSnapshot = previousTitleItemId
+        ? await db.collection("item-db").doc(previousTitleItemId).get()
+        : null;
+      const previousTitleDefinition = previousTitleSnapshot?.exists
+        ? { id: previousTitleSnapshot.id, ...previousTitleSnapshot.data() }
+        : null;
+      nextInventory.push(
+        buildInventoryItemFromDefinition(
+          previousTitleDefinition || {
+            id: previousTitleItemId || buildItemId(previousTitleItemName),
+            name: previousTitleItemName,
+            shortLabel: previousTitleItemName,
+            description: `${currentTitle} 칭호 아이템입니다.`,
+            icon: "🏷️",
+            category: "소모품",
+          }
+        )
+      );
+    }
+    profileUpdates.profileTitle = titleText;
+    profileUpdates.profileTitleItemId = String(usedItem?.itemId || itemDefinition?.id || "").trim();
+    profileUpdates.profileTitleItemName = normalizedItemName;
+    effectDescription = `칭호 '${titleText}' 을(를) 장착했습니다.`;
+  } else if (normalizedItemName === "낡은 차광포") {
     if (isFutureIsoTimestamp(userData.publicInventoryHiddenUntil)) {
       throw new HttpsError("failed-precondition", "이미 차광포 효과가 진행 중입니다.");
     }
@@ -1466,7 +1587,60 @@ exports.useInventoryItem = onCall(async (request) => {
     createdDecoration: serialize(createdDecoration),
     grantedCurrency,
     stolenItem: serialize(stolenItem),
+    grantedItem: serialize(grantedItem),
     profileUpdates: serialize(profileUpdates),
+  };
+});
+
+exports.clearProfileTitle = onCall(async (request) => {
+  assertAuthenticated(request);
+  const userSnapshot = await findUserSnapshotByUid(request.auth.uid);
+  if (!userSnapshot) {
+    throw new HttpsError("not-found", "User profile was not found.");
+  }
+
+  const userData = userSnapshot.data() || {};
+  const currentTitle = String(userData.profileTitle || "").trim();
+  if (!currentTitle) {
+    throw new HttpsError("failed-precondition", "해제할 칭호가 없습니다.");
+  }
+
+  const titleItemId = String(userData.profileTitleItemId || "").trim();
+  const titleItemName = String(userData.profileTitleItemName || `칭호:${currentTitle}`).trim();
+  const itemSnapshot = titleItemId ? await db.collection("item-db").doc(titleItemId).get() : null;
+  const itemDefinition = itemSnapshot?.exists ? { id: itemSnapshot.id, ...itemSnapshot.data() } : null;
+  const inventory = Array.isArray(userData.inventory) ? [...userData.inventory] : [];
+
+  inventory.push(
+    buildInventoryItemFromDefinition(
+      itemDefinition || {
+        id: titleItemId || buildItemId(titleItemName),
+        name: titleItemName,
+        shortLabel: titleItemName,
+        description: `${currentTitle} 칭호 아이템입니다.`,
+        icon: "🏷️",
+        category: "소모품",
+      }
+    )
+  );
+
+  await userSnapshot.ref.update({
+    inventory,
+    profileTitle: FieldValue.delete(),
+    profileTitleItemId: FieldValue.delete(),
+    profileTitleItemName: FieldValue.delete(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    profile: serialize({
+      ...userData,
+      inventory,
+      profileTitle: "",
+      profileTitleItemId: "",
+      profileTitleItemName: "",
+    }),
   };
 });
 
@@ -1922,6 +2096,7 @@ exports.yachtAction = onCall(async (request) => {
       return runYachtRoomMutation(roomId, async (transaction, snapshot) => {
         const room = snapshot.data();
         const diceSeed = Number(request.data?.diceSeed || 0);
+        const previewOnly = Boolean(request.data?.previewOnly);
         if (String(room.status || "") !== YACHT_ROOM_STATUS_PLAYING) {
           throw new HttpsError("failed-precondition", "진행 중인 방만 동기화할 수 있습니다.");
         }
@@ -1932,12 +2107,20 @@ exports.yachtAction = onCall(async (request) => {
           throw new HttpsError("failed-precondition", "이미 다음 굴림 상태로 변경되었습니다.");
         }
 
-        const dice = normalizeYachtDice(room.dice);
         const visualDiceState = normalizeYachtVisualDiceState(
           request.data?.visualDiceState,
           Number(room.diceSeed || 0),
-          dice
+          normalizeYachtDice(request.data?.dice)
         );
+        if (previewOnly) {
+          transaction.update(snapshot.ref, {
+            visualDiceState,
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedAtMs: Date.now(),
+          });
+          return { ok: true };
+        }
+        const dice = normalizeYachtDice(request.data?.dice);
         const updatePayload = {
           dice,
           visualDiceState,
@@ -2695,7 +2878,7 @@ function normalizeYachtVisualDiceState(visualDiceState, fallbackDiceSeed = 0, fa
   }
 
   const diceSeed = Math.max(0, Number(visualDiceState.diceSeed || fallbackDiceSeed || 0));
-  const values = normalizeYachtDice(fallbackDice);
+  const values = normalizeYachtDice(Array.isArray(visualDiceState.values) ? visualDiceState.values : fallbackDice);
   const sourcePoses = visualDiceState.poses && typeof visualDiceState.poses === "object" ? visualDiceState.poses : {};
   const poses = {};
 
@@ -3047,18 +3230,6 @@ function applyYachtScheduledAdvance(transaction, roomRef, room, now) {
 
 function applyYachtLeaveRoom(transaction, snapshot, uid) {
   const room = snapshot.data();
-  if (String(room.status || "") === YACHT_ROOM_STATUS_FINISHED) {
-    const spectators = (Array.isArray(room.spectators) ? room.spectators : []).filter(
-      (spectator) => String(spectator.uid || "") !== String(uid || "")
-    );
-    transaction.update(snapshot.ref, {
-      spectators,
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedAtMs: Date.now(),
-    });
-    return;
-  }
-
   let players = (Array.isArray(room.players) ? room.players : []).filter(
     (player) => String(player.uid || "") !== String(uid || "")
   );
@@ -3155,6 +3326,7 @@ function normalizeItemCategory(category) {
     ["음식", "음식"],
     ["의상", "치장 아이템"],
     ["치장 아이템", "치장 아이템"],
+    ["마작", "프로필 꾸미기"],
     ["프로필 꾸미기", "프로필 꾸미기"],
     ["화폐", "화폐"],
   ]);
@@ -3186,6 +3358,119 @@ function normalizeSystemItemName(name) {
   if (["거절권", "폐기 승인서", "반송장"].includes(normalized)) return "반송장";
   if (["위장 물약", "위조된 이름표"].includes(normalized)) return "위조된 이름표";
   return normalized;
+}
+
+function getRandomBoxTypeByName(name) {
+  const normalized = normalizeSystemItemName(name).replace(/\s+/g, "");
+  if (normalized === "랜덤박스:소모품") return "소모품";
+  if (normalized === "랜덤박스:의상") return "의상";
+  if (normalized === "랜덤박스:프로필꾸미기") return "프로필 꾸미기";
+  return "";
+}
+
+function normalizeRandomBoxRewardItemIds(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.map((item) => String(item || "").trim()).filter(Boolean))]
+      : [];
+  } catch {
+    return [...new Set(raw.split(",").map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+}
+
+const MAHJONG_PROFILE_TILE_LABELS = [
+  "동", "남", "서", "북", "백", "발", "중",
+  "1만", "2만", "3만", "4만", "5만", "6만", "7만", "8만", "9만",
+  "1통", "2통", "3통", "4통", "5통", "6통", "7통", "8통", "9통",
+  "1삭", "2삭", "3삭", "4삭", "5삭", "6삭", "7삭", "8삭", "9삭",
+  "아카5만", "아카5삭", "아카5통",
+];
+
+function buildMahjongProfileItemDefinitions() {
+  return MAHJONG_PROFILE_TILE_LABELS.map((label) => ({
+    name: `마작패:${label}`,
+    shortLabel: label,
+    spriteKey: `도트배포_리프트라시르__마작__${label}`,
+    category: "프로필 꾸미기",
+  }));
+}
+
+function extractProfileTitleText(itemName) {
+  const normalized = normalizeSystemItemName(itemName);
+  if (!normalized.startsWith("칭호:")) return "";
+  return String(normalized.slice(3)).trim();
+}
+
+function buildItemUseConfig({ itemName = "", randomBoxRewardItemIds = [] } = {}) {
+  const randomBoxType = getRandomBoxTypeByName(itemName);
+  if (!randomBoxType) {
+    return {};
+  }
+  return {
+    randomBoxType,
+    randomBoxRewardItemIds: normalizeRandomBoxRewardItemIds(randomBoxRewardItemIds),
+  };
+}
+
+function getCharacterNameColorPresetIds() {
+  const palette = [
+    "crimson",
+    "pink",
+    "rose-gold",
+    "orange",
+    "yellow",
+    "blue-neon",
+    "sky",
+    "teal",
+    "emerald",
+    "violet",
+    "lavender",
+    "faded",
+    "black",
+    "white",
+  ];
+  for (let index = 1; index <= 128; index += 1) {
+    palette.push(`dye-${String(index).padStart(3, "0")}`);
+  }
+  return palette;
+}
+
+function pickRandomCharacterNameColorPreset() {
+  const palette = getCharacterNameColorPresetIds();
+  return palette[Math.floor(Math.random() * palette.length)] || "";
+}
+
+function getCharacterNameColorLabel(presetId) {
+  const normalized = String(presetId || "").trim();
+  const colorLabels = new Map([
+    ["crimson", "크림슨"],
+    ["pink", "분홍빛"],
+    ["rose-gold", "장미금"],
+    ["orange", "주황빛"],
+    ["yellow", "황금빛"],
+    ["blue-neon", "청색 네온"],
+    ["sky", "하늘빛"],
+    ["teal", "청록"],
+    ["emerald", "에메랄드"],
+    ["violet", "암시장 보라"],
+    ["lavender", "라벤더"],
+    ["faded", "퇴색"],
+    ["black", "먹빛"],
+    ["white", "백자빛"],
+  ]);
+  if (colorLabels.has(normalized)) {
+    return colorLabels.get(normalized) || "랜덤";
+  }
+  if (/^dye-\d{3}$/.test(normalized)) {
+    return `염색 ${normalized.slice(-3)}`;
+  }
+  return "랜덤";
 }
 
 function isSafeItem(item) {
@@ -3247,18 +3532,10 @@ function normalizeSystemInventoryItem(item) {
   const name = normalizeSystemItemName(item.name);
   const nextItem = { ...item, name };
   if (name === "택배 상자") {
-    nextItem.shortLabel = "택배 상자";
-    nextItem.description =
-      nextItem.description && !String(nextItem.description).includes("내용물을 숨겨")
-        ? nextItem.description
-        : "소포의 내용물을 숨겨서 보낼 때 사용하는 시스템 물품입니다.";
+    nextItem.shortLabel = nextItem.shortLabel || "택배 상자";
   }
   if (name === "반송장") {
-    nextItem.shortLabel = "반송장";
-    nextItem.description =
-      nextItem.description && !String(nextItem.description).includes("거절")
-        ? nextItem.description
-        : "택배 상자로 온 소포를 반송할 때 사용하는 시스템 물품입니다.";
+    nextItem.shortLabel = nextItem.shortLabel || "반송장";
   }
   return nextItem;
 }

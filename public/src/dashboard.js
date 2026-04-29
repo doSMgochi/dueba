@@ -40,6 +40,7 @@ import {
   createAnnouncement,
   deleteItemDefinition,
   dismissAnnouncement,
+  ensureMahjongProfileItems,
   getRankingBoard,
   listAdminLogs,
   listBugReports,
@@ -50,6 +51,7 @@ import {
   returnProfileDecorationToInventory,
   sendParcel,
   changeUserPassword,
+  clearProfileTitle,
   updateMemberProfile,
   updateProfileDecorations,
   useInventoryItem,
@@ -123,11 +125,61 @@ let bugReportPage = 0;
 let adminItemCatalogCache = [];
 let adminItemCatalogPromise = null;
 let rouletteDropItemMode = false;
+let ensureMahjongProfileItemsPromise = null;
+let hasEnsuredMahjongProfileItems = false;
 const quickProfileCacheTtl = 60 * 1000;
 let rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
 let activeAdminItemSection = "create";
 let profileDecorationEditMode = false;
 let mobileInfoExpanded = false;
+const randomBoxAdminItems = [
+  { name: "랜덤박스:소모품", typeLabel: "소모품" },
+  { name: "랜덤박스:의상", typeLabel: "의상" },
+  { name: "랜덤박스:프로필 꾸미기", typeLabel: "프로필 꾸미기" },
+];
+
+function hydrateCustomSpritesFromItems(items = []) {
+  items.forEach((item) => {
+    const spriteKey = String(item?.spriteKey || "").trim();
+    if (!spriteKey.startsWith("custom:")) return;
+    const customUrl = spriteKey.slice("custom:".length).trim();
+    if (!customUrl) return;
+    const searchable = `${String(item?.name || "").trim()} ${String(item?.shortLabel || "").trim()} ${customUrl}`;
+    if (!searchable.includes("날개")) return;
+    registerCustomItemSprite({
+      url: customUrl,
+      label: item?.name || item?.shortLabel || customUrl,
+    });
+  });
+}
+
+async function ensureAdminMahjongProfileItems(onToast) {
+  if (hasEnsuredMahjongProfileItems) return null;
+  if (ensureMahjongProfileItemsPromise) return ensureMahjongProfileItemsPromise;
+  ensureMahjongProfileItemsPromise = (async () => {
+    try {
+      const result = await ensureMahjongProfileItems();
+      hasEnsuredMahjongProfileItems = true;
+      const createdCount = Math.max(0, Number(result?.createdCount || 0));
+      if (createdCount > 0) {
+        await loadAdminItemCatalog(true);
+        await hydrateAdminItemOptions();
+        refreshAdminItemSelectors({ root: document });
+        if (document.querySelector("#item-db-grid")) {
+          await hydrateItemDatabasePanel();
+        }
+        onToast?.(`마작패 아이템 ${createdCount}개를 추가했습니다.`);
+      }
+      return result;
+    } catch (error) {
+      console.error("Failed to ensure mahjong profile items", error);
+      return null;
+    } finally {
+      ensureMahjongProfileItemsPromise = null;
+    }
+  })();
+  return ensureMahjongProfileItemsPromise;
+}
 
 async function withPendingToast(onToast, task) {
   onToast("처리중입니다.", false, { persist: true });
@@ -1026,6 +1078,7 @@ async function loadAdminItemCatalog(forceRefresh = false) {
 
   adminItemCatalogPromise = fetchCollectionItems("item-db", "sortOrder")
     .then((items) => {
+      hydrateCustomSpritesFromItems(items);
       adminItemCatalogCache = items;
       adminItemCatalogPromise = null;
       return items;
@@ -1182,7 +1235,7 @@ function renderProfileQuickButton({ profile, onProfilePatched, onToast }) {
   };
 }
 
-async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched, onToast }) {
+async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched, onToast, preserveContent = false, suppressCardEnter = false }) {
   const modal = ensureProfileQuickModal();
   const content = modal.querySelector("#profile-quick-card");
   const fileInput = modal.querySelector("#profile-seal-input");
@@ -1192,7 +1245,9 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
   if (!content || !fileInput || !sealButton || !closeButton || !closeIcon) return;
 
   modal.classList.remove("hidden");
-  content.innerHTML = '<div class="panel empty-state">간단 프로필을 불러오는 중입니다.</div>';
+  if (!preserveContent || !content.innerHTML.trim()) {
+    content.innerHTML = '<div class="panel empty-state">간단 프로필을 불러오는 중입니다.</div>';
+  }
 
   const rankings = await getCachedRankingBoard().catch(() => []);
   const normalizedRankings = buildDisplayRankings(rankings);
@@ -1244,7 +1299,9 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
 
   content.innerHTML = `
     <div class="profile-card-stage">
-      <div class="profile-lobby-card profile-lobby-card-enter ${factionThemeClass}">
+      <div class="profile-card-scale-box">
+        <div class="profile-card-scale-shell">
+          <div class="profile-lobby-card ${suppressCardEnter ? "" : "profile-lobby-card-enter"} ${factionThemeClass}">
         <div class="profile-card-frame profile-card-frame-outer" aria-hidden="true"></div>
         <div class="profile-card-frame profile-card-frame-inner" aria-hidden="true"></div>
         <div class="profile-decoration-layer" data-profile-decoration-layer data-profile-decoration-editable="${canEditProfileDecorations ? "true" : "false"}">
@@ -1261,7 +1318,7 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
         </div>
         <div class="profile-lobby-meta">
           <p class="eyebrow">PLAYER LOBBY</p>
-          <h2>${escapeHtml(profile.characterName || "-")}</h2>
+          <h2${buildCharacterNameStyleAttribute(profile)}>${buildDisplayedCharacterNameMarkup(profile)}</h2>
           <div class="profile-lobby-grid">
             <div><span>작혼 닉네임</span><strong>${escapeHtml(nicknameList.join(" / ") || "-")}</strong></div>
             <div><span>파벌</span><strong>${escapeHtml(factionName || "미설정")}</strong></div>
@@ -1275,9 +1332,13 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
             <div class="profile-item-summary">${inventorySummary}</div>
           </div>
         </div>
+          </div>
+        </div>
       </div>
     </div>
   `;
+  ensureProfileQuickCardScaler(modal);
+  applyProfileQuickCardScale(modal);
   profile.profileDecorations = profileDecorations;
   modal.__profileQuickState = modalProfileState;
   bindProfileDecorationEditor({ modal, profile, onProfilePatched, onToast });
@@ -1287,6 +1348,7 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
   sealButton.onclick = () => fileInput.click();
   const profileActions = modal.querySelector(".profile-quick-actions");
   profileActions?.querySelector("[data-profile-decoration-edit-toggle]")?.remove();
+  profileActions?.querySelector("[data-profile-title-clear]")?.remove();
   if (profileActions && isOwnProfile && !profileActions.querySelector("[data-profile-decoration-edit-toggle]")) {
     const editButton = document.createElement("button");
     editButton.type = "button";
@@ -1322,9 +1384,38 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
         viewerProfile: nextViewerProfile,
         onProfilePatched,
         onToast,
+        preserveContent: true,
+        suppressCardEnter: true,
       });
     });
     profileActions.insertBefore(editButton, closeButton);
+  }
+  if (profileActions && isOwnProfile && String(profile.profileTitle || "").trim()) {
+    const clearTitleButton = document.createElement("button");
+    clearTitleButton.type = "button";
+    clearTitleButton.className = "ghost-button";
+    clearTitleButton.dataset.profileTitleClear = "true";
+    clearTitleButton.textContent = "칭호 해제";
+    clearTitleButton.addEventListener("click", async () => {
+      try {
+        await withPendingToast(onToast, () => clearProfileTitle());
+        invalidateQuickProfileCaches();
+        const refreshedProfile = await refreshCurrentUserProfile();
+        await onProfilePatched(refreshedProfile);
+        await showProfileQuickModal({
+          profile: refreshedProfile,
+          viewerProfile: refreshedProfile,
+          onProfilePatched,
+          onToast,
+          preserveContent: true,
+          suppressCardEnter: true,
+        });
+        onToast("칭호를 해제하고 아이템으로 돌려보냈습니다.");
+      } catch (error) {
+        onToast(error.message || "칭호를 해제하지 못했습니다.", true);
+      }
+    });
+    profileActions.insertBefore(clearTitleButton, closeButton);
   }
   fileInput.onchange = async (event) => {
     const file = event.target.files?.[0];
@@ -1348,6 +1439,78 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
   const close = () => modal.classList.add("hidden");
   closeButton.onclick = close;
   closeIcon.onclick = close;
+}
+
+function applyProfileQuickCardScale(modal) {
+  const panel = modal?.querySelector(".profile-quick-modal-panel");
+  const content = modal?.querySelector("#profile-quick-card");
+  const stage = modal?.querySelector(".profile-card-stage");
+  const scaleBox = modal?.querySelector(".profile-card-scale-box");
+  const scaleShell = modal?.querySelector(".profile-card-scale-shell");
+  const card = modal?.querySelector(".profile-lobby-card");
+  const header = modal?.querySelector(".modal-head");
+  const actions = modal?.querySelector(".profile-quick-actions");
+  if (
+    !(panel instanceof HTMLElement) ||
+    !(content instanceof HTMLElement) ||
+    !(stage instanceof HTMLElement) ||
+    !(scaleBox instanceof HTMLElement) ||
+    !(scaleShell instanceof HTMLElement) ||
+    !(card instanceof HTMLElement) ||
+    !(header instanceof HTMLElement) ||
+    !(actions instanceof HTMLElement)
+  ) return;
+
+  content.style.removeProperty("height");
+  scaleShell.style.transform = "scale(1)";
+  scaleBox.style.removeProperty("width");
+  scaleBox.style.removeProperty("height");
+
+  const naturalWidth = Math.max(1, card.offsetWidth || card.scrollWidth || 836);
+  const naturalHeight = Math.max(1, card.offsetHeight || card.scrollHeight || 332);
+  const availableWidth = Math.max(1, content.clientWidth);
+  const panelStyles = window.getComputedStyle(panel);
+  const actionsStyles = window.getComputedStyle(actions);
+  const backdropStyles = modal instanceof HTMLElement ? window.getComputedStyle(modal) : null;
+  const panelPaddingBlock =
+    (parseFloat(panelStyles.paddingTop) || 0) +
+    (parseFloat(panelStyles.paddingBottom) || 0);
+  const actionsMarginTop = parseFloat(actionsStyles.marginTop) || 0;
+  const backdropPaddingBlock = backdropStyles
+    ? (parseFloat(backdropStyles.paddingTop) || 0) + (parseFloat(backdropStyles.paddingBottom) || 0)
+    : 0;
+  const viewportHeight = Math.max(
+    1,
+    window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0
+  );
+  const availableHeight = Math.max(
+    1,
+    viewportHeight -
+      backdropPaddingBlock -
+      panelPaddingBlock -
+      header.offsetHeight -
+      actions.offsetHeight -
+      actionsMarginTop
+  );
+  const nextScale = Math.min(1, availableWidth / naturalWidth, availableHeight / naturalHeight);
+  const scaledWidth = Math.max(1, Math.floor(naturalWidth * nextScale));
+  const scaledHeight = Math.max(1, Math.floor(naturalHeight * nextScale));
+
+  content.style.height = `${scaledHeight}px`;
+  scaleBox.style.width = `${scaledWidth}px`;
+  scaleBox.style.height = `${scaledHeight}px`;
+  scaleShell.style.width = `${naturalWidth}px`;
+  scaleShell.style.height = `${naturalHeight}px`;
+  scaleShell.style.transform = `translateZ(0) scale(${nextScale})`;
+}
+
+function ensureProfileQuickCardScaler(modal) {
+  if (modal?.__profileQuickScaleObserver) return;
+  const content = modal?.querySelector("#profile-quick-card");
+  if (!(content instanceof HTMLElement)) return;
+  const observer = new ResizeObserver(() => applyProfileQuickCardScale(modal));
+  observer.observe(content);
+  modal.__profileQuickScaleObserver = observer;
 }
 
 function ensureProfileQuickModal() {
@@ -1643,7 +1806,7 @@ async function hydrateRankingPanel() {
         return `
           <tr>
             <td>${item.displayRank}</td>
-            <td><button type="button" class="text-button ranking-profile-button" data-ranking-character="${escapeHtml(item.characterName || "")}">${escapeHtml(item.characterName || "-")}</button></td>
+            <td><button type="button" class="text-button ranking-profile-button" data-ranking-character="${escapeHtml(item.characterName || "")}"${buildCharacterNameStyleAttribute(item)}>${buildDisplayedCharacterNameMarkup(item)}</button></td>
             <td>${escapeHtml(item.nickname || "-")}</td>
             <td>${Number(item.rankingPoints || 0)}</td>
             <td>${Number(item.currency || 0)} 환</td>
@@ -1864,6 +2027,7 @@ function attachParcelForm({ profile, onProfilePatched, onToast }) {
         const result = await withPendingToast(onToast, () =>
           useInventoryItem(buildInventoryItemKey(availableItem), extraData)
         );
+        invalidateQuickProfileCaches();
         await onProfilePatched();
         showItemUseResultModal(result);
       } catch (error) {
@@ -2790,9 +2954,17 @@ function hydrateAdminPanel({ onProfilePatched, onToast }) {
   const body = document.querySelector("#admin-section-body");
   if (!body) return;
 
+  if (activeAdminSection === "random-box") {
+    activeAdminSection = "items";
+    activeAdminItemSection = "random-box";
+  }
+
   renderAdminSection(body);
   if (activeAdminSection === "items") {
     renderAdminItemSection();
+    if (activeAdminItemSection === "random-box") {
+      void renderAdminRandomBoxSection({ onProfilePatched, onToast });
+    }
   }
 
   document.querySelectorAll("[data-admin-section]").forEach((button) => {
@@ -2891,6 +3063,7 @@ function renderAdminSection(body) {
           <div class="admin-section-tabs admin-subtabs">
             <button type="button" class="tab-button ${activeAdminItemSection === "create" ? "active" : ""}" data-admin-item-section="create">아이템 추가</button>
             <button type="button" class="tab-button ${activeAdminItemSection === "edit" ? "active" : ""}" data-admin-item-section="edit">아이템 수정</button>
+            <button type="button" class="tab-button ${activeAdminItemSection === "random-box" ? "active" : ""}" data-admin-item-section="random-box">랜덤박스</button>
             <button type="button" class="tab-button ${activeAdminItemSection === "delete" ? "active" : ""}" data-admin-item-section="delete">아이템 삭제</button>
           </div>
           <div id="admin-item-section-body"></div>
@@ -2943,6 +3116,65 @@ function renderAdminSection(body) {
   };
 
   body.innerHTML = sections[activeAdminSection] || sections["user-adjust"];
+}
+
+function buildRandomBoxConfigMarkup(prefix) {
+  return `
+    <div class="random-box-config" data-random-box-config>
+      <input type="hidden" name="randomBoxRewardItemIds" value="[]" data-random-box-reward-input />
+      <div class="stack-form compact-form random-box-config-body">
+        <div class="auto-category-badge-row">
+          <span>랜덤박스 보상</span>
+          <div class="auto-category-actions">
+            <strong data-random-box-type-label>랜덤박스 아님</strong>
+          </div>
+        </div>
+        <p class="muted random-box-config-hint" data-random-box-hint>아이템 이름이 랜덤박스 3종 중 하나일 때만 실제로 사용됩니다.</p>
+        <label>
+          <span>보상 아이템 선택</span>
+          ${buildAdminItemSelector({ inputName: `${prefix}RandomBoxRewardCandidate`, selectorId: `${prefix}-random-box-reward-select`, placeholder: "보상 아이템을 선택하세요" })}
+        </label>
+        <div class="random-box-config-actions">
+          <button type="button" class="ghost-button compact-button" data-random-box-add-button>보상 추가</button>
+        </div>
+        <div class="random-box-reward-list muted" data-random-box-reward-list>등록된 보상이 없습니다.</div>
+      </div>
+    </div>
+  `;
+}
+
+function buildRandomBoxAdminCardMarkup({ name, typeLabel }, index) {
+  return `
+    <div class="stack-form compact-form content-card random-box-admin-card" data-random-box-admin-form data-random-box-name="${escapeHtml(name)}">
+      <input type="hidden" name="itemId" value="" data-random-box-item-id />
+      <input type="hidden" name="randomBoxRewardItemIds" value="[]" data-random-box-reward-input />
+      <div class="random-box-admin-head">
+        <div>
+          <strong>${escapeHtml(name)}</strong>
+          <p class="muted">${escapeHtml(typeLabel)} 랜덤박스에서 나올 보상을 정합니다.</p>
+        </div>
+      </div>
+      <label>
+        <span>보상 아이템 선택</span>
+        <div data-random-box-add-selector>
+          ${buildAdminItemSelector({ inputName: `adminRandomBoxRewardCandidate${index}`, selectorId: `admin-random-box-reward-select-${index}`, placeholder: "보상 아이템을 선택하세요" })}
+        </div>
+      </label>
+      <div class="random-box-config-actions">
+        <button type="button" class="ghost-button compact-button" data-random-box-add-button>보상 추가</button>
+      </div>
+      <label>
+        <span>현재 등록된 보상</span>
+        <div data-random-box-remove-selector>
+          ${buildAdminItemSelector({ inputName: `adminRandomBoxRewardRemove${index}`, selectorId: `admin-random-box-reward-remove-${index}`, placeholder: "등록된 보상 중에서 선택하세요" })}
+        </div>
+      </label>
+      <div class="random-box-config-actions">
+        <button type="button" class="ghost-button compact-button danger-button" data-random-box-remove-button>선택 보상 제거</button>
+      </div>
+      <div class="random-box-reward-list muted" data-random-box-reward-list>등록된 보상이 없습니다.</div>
+    </div>
+  `;
 }
 
 function renderAdminItemSection() {
@@ -3042,6 +3274,12 @@ function renderAdminItemSection() {
         <button type="submit" class="primary-button">아이템 수정</button>
       </form>
     `,
+    "random-box": `
+      <div class="stack-form compact-form">
+        <p class="muted">랜덤박스 3종이 열렸을 때 나올 아이템을 여기서 바로 추가하거나 제거합니다.</p>
+        <div id="admin-random-box-section-body" class="admin-random-box-grid"></div>
+      </div>
+    `,
     delete: `
       <form id="admin-item-delete-form" class="stack-form compact-form">
         <label>
@@ -3056,6 +3294,131 @@ function renderAdminItemSection() {
   body.innerHTML = sections[activeAdminItemSection] || sections.create;
 }
 
+async function renderAdminRandomBoxSection({ onProfilePatched, onToast }) {
+  const body = document.querySelector("#admin-random-box-section-body");
+  if (!body) return;
+
+  body.innerHTML = randomBoxAdminItems
+    .map((entry, index) => buildRandomBoxAdminCardMarkup(entry, index))
+    .join("");
+
+  initializeAdminItemSelectors(body);
+  await hydrateAdminItemOptions();
+
+  const [items, shopItems] = await Promise.all([
+    fetchCollectionItems("item-db", "sortOrder"),
+    fetchCollectionItems("shop", "sortOrder").catch(() => []),
+  ]);
+  const itemMap = new Map(items.map((item) => [String(item.name || "").trim(), item]));
+  const shopMap = new Map(shopItems.map((item) => [String(item.id || "").trim(), item]));
+
+  const persistRandomBoxRewards = async (item, rewardIds) => {
+    const shopItem = shopMap.get(String(item.id || "").trim());
+    const payload = {
+      itemId: item.id,
+      name: item.name || "",
+      description: item.description || "",
+      shortLabel: item.shortLabel || item.name || "",
+      icon: item.icon || "🎁",
+      spriteKey: item.spriteKey || "",
+      colorPreset: item.colorPreset || "",
+      category: item.category || "기타 아이템",
+      foodCurrencyReward: Number(item.foodCurrencyReward || 0),
+      sellInShop: Boolean(shopItem || item.sellInShop),
+      price: Number(shopItem?.price || item.price || 0),
+      randomBoxRewardItemIds: normalizeRandomBoxRewardIds(rewardIds),
+    };
+    await withPendingToast(onToast, () => updateItemDefinition(payload));
+    await loadAdminItemCatalog(true);
+  };
+
+  const refreshRandomBoxControls = (form) => {
+    const rewardInput = form.querySelector("[data-random-box-reward-input]");
+    const removeSelector = form.querySelector("#" + CSS.escape(String(form.dataset.randomBoxRemoveSelectorId || "")));
+    if (!(rewardInput instanceof HTMLInputElement) || !(removeSelector instanceof HTMLElement)) return;
+    const rewardIds = normalizeRandomBoxRewardIds(rewardInput.value);
+    removeSelector.dataset.allowedItemIds = JSON.stringify(rewardIds);
+    syncAdminItemSelector(removeSelector, "");
+  };
+
+  body.querySelectorAll("[data-random-box-admin-form]").forEach((form) => {
+    const boxName = String(form.dataset.randomBoxName || "").trim();
+    const item = itemMap.get(boxName);
+    const itemIdInput = form.querySelector("[data-random-box-item-id]");
+    const rewardInput = form.querySelector("[data-random-box-reward-input]");
+    const selector = form.querySelector("[data-random-box-add-selector] [data-admin-item-selector]");
+    const removeSelector = form.querySelector("[data-random-box-remove-selector] [data-admin-item-selector]");
+    const addButton = form.querySelector("[data-random-box-add-button]");
+    const removeButton = form.querySelector("[data-random-box-remove-button]");
+    if (removeSelector instanceof HTMLElement && removeSelector.id) {
+      form.dataset.randomBoxRemoveSelectorId = removeSelector.id;
+    }
+
+    if (itemIdInput instanceof HTMLInputElement) {
+      itemIdInput.value = String(item?.id || "").trim();
+    }
+    if (rewardInput instanceof HTMLInputElement) {
+      rewardInput.value = JSON.stringify(normalizeRandomBoxRewardIds(item?.useConfig?.randomBoxRewardItemIds || []));
+    }
+    renderRandomBoxRewardList(form);
+    refreshRandomBoxControls(form);
+
+    addButton?.addEventListener("click", () => {
+      if (!(rewardInput instanceof HTMLInputElement) || !(selector instanceof HTMLElement)) return;
+      const candidateId = String(selector.dataset.selectedItemId || selector.querySelector("[data-item-selector-input]")?.value || "").trim();
+      if (!candidateId) return;
+      const nextIds = normalizeRandomBoxRewardIds(rewardInput.value);
+      if (!nextIds.includes(candidateId)) {
+        nextIds.push(candidateId);
+      } else {
+        handleAdminItemSelection(selector, "");
+        return;
+      }
+      rewardInput.value = JSON.stringify(nextIds);
+      (async () => {
+        if (!item) {
+          onToast("랜덤박스 아이템 정의를 찾지 못했습니다.", true);
+          return;
+        }
+        try {
+          await persistRandomBoxRewards(item, nextIds);
+          renderRandomBoxRewardList(form);
+          refreshRandomBoxControls(form);
+          handleAdminItemSelection(selector, "");
+          onToast(`${boxName} 보상을 추가했습니다.`);
+        } catch (error) {
+          onToast(error.message, true);
+        }
+      })();
+    });
+
+    removeButton?.addEventListener("click", () => {
+      if (!(rewardInput instanceof HTMLInputElement) || !(removeSelector instanceof HTMLElement)) return;
+      const targetId = String(removeSelector.dataset.selectedItemId || removeSelector.querySelector("[data-item-selector-input]")?.value || "").trim();
+      if (!targetId) {
+        onToast("제거할 보상을 먼저 선택해 주세요.", true);
+        return;
+      }
+      const nextIds = normalizeRandomBoxRewardIds(rewardInput.value).filter((itemId) => itemId !== targetId);
+      rewardInput.value = JSON.stringify(nextIds);
+      (async () => {
+        if (!item) {
+          onToast("랜덤박스 아이템 정의를 찾지 못했습니다.", true);
+          return;
+        }
+        try {
+          await persistRandomBoxRewards(item, nextIds);
+          renderRandomBoxRewardList(form);
+          refreshRandomBoxControls(form);
+          onToast(`${boxName} 보상을 제거했습니다.`);
+        } catch (error) {
+          onToast(error.message, true);
+        }
+      })();
+    });
+  });
+}
+
 function attachAdminEvents({ onProfilePatched, onToast }) {
   const manageForm = document.querySelector("#admin-manage-form");
   const itemForm = document.querySelector("#admin-item-form");
@@ -3066,15 +3429,23 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
 
   initializeItemSpritePickers();
   initializeAdminItemSelectors();
+  void ensureAdminMahjongProfileItems(onToast);
 
   document.querySelectorAll("[data-admin-item-section]").forEach((button) => {
     button.classList.toggle("active", button.dataset.adminItemSection === activeAdminItemSection);
     button.onclick = () => {
       activeAdminItemSection = button.dataset.adminItemSection;
       renderAdminItemSection();
+      if (activeAdminItemSection === "random-box") {
+        void renderAdminRandomBoxSection({ onProfilePatched, onToast });
+      }
       attachAdminEvents({ onProfilePatched, onToast });
     };
   });
+
+  if (activeAdminItemSection === "random-box") {
+    void renderAdminRandomBoxSection({ onProfilePatched, onToast });
+  }
 
   if (manageForm) {
     const targetInput = manageForm.querySelector('input[name="targetCharacterName"]');
@@ -3229,6 +3600,12 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
         itemEditForm.elements.description.value = item.description || "";
         itemEditForm.elements.colorPreset.value = String(item.colorPreset || "");
         itemEditForm.elements.foodCurrencyReward.value = String(Math.max(0, Number(item.foodCurrencyReward || 0)));
+        const randomBoxRewardInput = itemEditForm.querySelector("[data-random-box-reward-input]");
+        if (randomBoxRewardInput instanceof HTMLInputElement) {
+          randomBoxRewardInput.value = JSON.stringify(
+            normalizeRandomBoxRewardIds(item?.useConfig?.randomBoxRewardItemIds || [])
+          );
+        }
         itemEditForm.elements.price.value = String(Number(shopItem?.price || 0));
         itemEditForm.elements.sellInShop.checked = Boolean(shopItem);
         bindAdminItemMetaForm(itemEditForm, true);
@@ -4737,12 +5114,7 @@ function normalizeSystemInventoryItemForDisplay(item) {
   const name = normalizeSystemItemName(item.name);
   const nextItem = { ...item, name };
   if (name !== item.name) {
-    nextItem.shortLabel = name;
-    if (name === "택배 상자") {
-      nextItem.description = "소포의 내용물을 숨겨서 보낼 때 사용하는 시스템 물품입니다.";
-    } else if (name === "반송장") {
-      nextItem.description = "택배 상자로 온 소포를 반송할 때 사용하는 시스템 물품입니다.";
-    }
+    nextItem.shortLabel = nextItem.shortLabel || name;
   }
   if (name === "금고") {
     const storedItem = item?.storedItem && typeof item.storedItem === "object"
@@ -4840,6 +5212,59 @@ function formatEffectUntil(value) {
 function isFutureIsoTimestamp(value) {
   const timestamp = Date.parse(String(value || ""));
   return Number.isFinite(timestamp) && timestamp > Date.now();
+}
+
+function buildCharacterNameColorPalette() {
+  const seeded = [
+    ["crimson", "#ef6677"],
+    ["pink", "#ff9bc2"],
+    ["rose-gold", "#f3bf8d"],
+    ["orange", "#ffb067"],
+    ["yellow", "#f3d86b"],
+    ["blue-neon", "#76b7ff"],
+    ["sky", "#9ee4ff"],
+    ["teal", "#7de3d5"],
+    ["emerald", "#78dd8c"],
+    ["violet", "#b487ff"],
+    ["lavender", "#d7c2ff"],
+    ["faded", "#c5c0bb"],
+    ["black", "#2f2f35"],
+    ["white", "#f4f1ea"],
+  ];
+  const palette = new Map(seeded);
+  for (let index = 1; index <= 128; index += 1) {
+    const hue = Math.round(((index - 1) * 360) / 128);
+    const saturation = 56 + (index % 4) * 8;
+    const lightness = 42 + (index % 5) * 6;
+    palette.set(`dye-${String(index).padStart(3, "0")}`, `hsl(${hue}deg ${saturation}% ${lightness}%)`);
+  }
+  return palette;
+}
+
+const characterNameColorPalette = buildCharacterNameColorPalette();
+
+function getCharacterNameColorValue(presetId) {
+  return characterNameColorPalette.get(String(presetId || "").trim()) || "";
+}
+
+function buildCharacterNameStyleAttribute(profileLike) {
+  const colorValue = getCharacterNameColorValue(profileLike?.characterNameColorPreset);
+  return colorValue ? ` style="color:${escapeHtml(colorValue)}"` : "";
+}
+
+function buildDisplayedCharacterName(profileLike) {
+  const title = String(profileLike?.profileTitle || "").trim();
+  const baseName = String(profileLike?.characterName || "-").trim() || "-";
+  return title ? `【${title}】${baseName}` : baseName;
+}
+
+function buildDisplayedCharacterNameMarkup(profileLike) {
+  const title = String(profileLike?.profileTitle || "").trim();
+  const baseName = String(profileLike?.characterName || "-").trim() || "-";
+  if (!title) {
+    return `<span class="character-name-core">${escapeHtml(baseName)}</span>`;
+  }
+  return `<span class="character-title-inline"><span class="character-title-bracket">【</span>${escapeHtml(title)}<span class="character-title-bracket">】</span></span><span class="character-name-core">${escapeHtml(baseName)}</span>`;
 }
 
 function isPublicInventoryHidden(profile) {
@@ -4941,6 +5366,16 @@ function bindAdminItemSelectorMenu(selector) {
   });
 }
 
+function getAdminItemSelectorSourceItems(selector) {
+  const allowedItemIds = normalizeRandomBoxRewardIds(selector?.dataset?.allowedItemIds || []);
+  if (!allowedItemIds.length) {
+    return adminItemCatalogCache;
+  }
+  return allowedItemIds
+    .map((itemId) => adminItemCatalogCache.find((item) => item.id === itemId))
+    .filter(Boolean);
+}
+
 function syncAdminItemSelector(selector, itemId) {
   if (!selector) return;
 
@@ -4952,9 +5387,11 @@ function syncAdminItemSelector(selector, itemId) {
 
   const placeholder = selector.dataset.placeholder || "아이템을 선택하세요";
   const normalizedItemId = String(itemId || "").trim();
-  const selectedItem = adminItemCatalogCache.find((item) => item.id === normalizedItemId) || null;
+  const sourceItems = getAdminItemSelectorSourceItems(selector);
+  const selectedItem = sourceItems.find((item) => item.id === normalizedItemId) || null;
   const selectedDisplayItem = selectedItem ? normalizeSystemInventoryItemForDisplay(selectedItem) : null;
   hiddenInput.value = selectedItem ? normalizedItemId : "";
+  selector.dataset.selectedItemId = selectedItem ? normalizedItemId : "";
 
   valueBox.innerHTML = selectedItem
     ? `
@@ -4966,8 +5403,8 @@ function syncAdminItemSelector(selector, itemId) {
     `
     : `<span class="item-selector-label muted" data-item-selector-label>${escapeHtml(placeholder)}</span>`;
 
-  menu.innerHTML = adminItemCatalogCache.length
-    ? adminItemCatalogCache.map((item) => buildAdminItemSelectorOption(item, item.id === normalizedItemId)).join("")
+  menu.innerHTML = sourceItems.length
+    ? sourceItems.map((item) => buildAdminItemSelectorOption(item, item.id === normalizedItemId)).join("")
     : '<div class="item-selector-empty">표시할 아이템이 없습니다.</div>';
 
   bindAdminItemSelectorMenu(selector);
@@ -5026,6 +5463,84 @@ function buildCategoryOverrideOptions(selectedValue = "") {
     .join("");
 }
 
+function getRandomBoxTypeByItemName(itemName) {
+  const normalized = normalizeSystemItemName(itemName).replace(/\s+/g, "");
+  if (normalized === "랜덤박스:소모품") return "소모품";
+  if (normalized === "랜덤박스:의상") return "의상";
+  if (normalized === "랜덤박스:프로필꾸미기") return "프로필 꾸미기";
+  return "";
+}
+
+function normalizeRandomBoxRewardIds(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.map((item) => String(item || "").trim()).filter(Boolean))]
+      : [];
+  } catch {
+    return [...new Set(raw.split(",").map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+}
+
+function renderRandomBoxRewardList(form) {
+  const hiddenInput = form?.querySelector("[data-random-box-reward-input]");
+  const list = form?.querySelector("[data-random-box-reward-list]");
+  if (!(hiddenInput instanceof HTMLInputElement) || !(list instanceof HTMLElement)) return;
+  const rewardIds = normalizeRandomBoxRewardIds(hiddenInput.value);
+  if (form?.matches?.("[data-random-box-admin-form]")) {
+    const items = rewardIds
+      .map((itemId) => adminItemCatalogCache.find((item) => item.id === itemId) || adminItemCatalog.find((item) => item.id === itemId))
+      .filter(Boolean);
+    if (!items.length) {
+      list.classList.remove("hidden");
+      list.classList.add("muted");
+      list.innerHTML = "등록된 보상이 없습니다.";
+      return;
+    }
+
+    list.classList.add("hidden");
+    list.classList.remove("muted");
+    list.innerHTML = "";
+    return;
+  }
+
+  const items = rewardIds
+    .map((itemId) => adminItemCatalog.find((item) => item.id === itemId))
+    .filter(Boolean);
+
+  if (!items.length) {
+    list.classList.add("muted");
+    list.innerHTML = "등록된 보상이 없습니다.";
+    return;
+  }
+
+  list.classList.remove("muted");
+  list.innerHTML = items
+    .map(
+      (item) => `
+        <div class="random-box-reward-chip">
+          <span class="random-box-reward-visual">${renderInventoryItemVisual(item)}</span>
+          <span class="random-box-reward-copy">${escapeHtml(item.name || item.id)}</span>
+          <button type="button" class="ghost-button compact-button danger-button" data-random-box-remove-id="${escapeHtml(item.id)}">제거</button>
+        </div>
+      `
+    )
+    .join("");
+
+  list.querySelectorAll("[data-random-box-remove-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextIds = rewardIds.filter((itemId) => itemId !== String(button.dataset.randomBoxRemoveId || "").trim());
+      hiddenInput.value = JSON.stringify(nextIds);
+      renderRandomBoxRewardList(form);
+    });
+  });
+}
+
 function bindAdminItemMetaForm(form, forceRefresh = false) {
   if (!form) return;
   if (form.dataset.metaBound === "true" && !forceRefresh) return;
@@ -5045,6 +5560,39 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
   const priceRow = form.querySelector("[data-shop-price-row]");
   const priceInput = form.elements.price;
   const customSpriteUpload = form.querySelector("[data-custom-sprite-upload]");
+  const itemNameInput = form.elements.name;
+  const randomBoxConfig = form.querySelector("[data-random-box-config]");
+  const randomBoxTypeLabel = form.querySelector("[data-random-box-type-label]");
+  const randomBoxRewardInput = form.querySelector("[data-random-box-reward-input]");
+  const randomBoxSelector = form.querySelector("[data-admin-item-selector][id*='random-box-reward-select']");
+  const randomBoxAddButton = form.querySelector("[data-random-box-add-button]");
+  const randomBoxHint = form.querySelector("[data-random-box-hint]");
+
+  const syncRandomBoxConfig = () => {
+    const randomBoxType = getRandomBoxTypeByItemName(itemNameInput?.value || "");
+    randomBoxConfig?.classList.toggle("is-disabled", !randomBoxType);
+    if (randomBoxTypeLabel) {
+      randomBoxTypeLabel.textContent = randomBoxType ? `${randomBoxType} 보상 목록` : "랜덤박스 3종 전용";
+    }
+    if (randomBoxHint) {
+      randomBoxHint.textContent = randomBoxType
+        ? `${randomBoxType} 랜덤박스에서 나올 수 있는 아이템을 골라주세요.`
+        : "아이템 이름을 랜덤박스:소모품 / 랜덤박스:의상 / 랜덤박스:프로필 꾸미기 중 하나로 입력하면 활성화됩니다.";
+    }
+    if (randomBoxSelector instanceof HTMLElement) {
+      randomBoxSelector.classList.toggle("is-disabled", !randomBoxType);
+      randomBoxSelector.querySelectorAll("button, input").forEach((element) => {
+        element.disabled = !randomBoxType;
+      });
+    }
+    if (randomBoxAddButton instanceof HTMLButtonElement) {
+      randomBoxAddButton.disabled = !randomBoxType;
+    }
+    if (!randomBoxType && randomBoxRewardInput instanceof HTMLInputElement && !forceRefresh) {
+      randomBoxRewardInput.value = "[]";
+    }
+    renderRandomBoxRewardList(form);
+  };
 
   const syncCategory = () => {
     const autoCategory = getItemSpriteCategory(hiddenSpriteInput?.value || "");
@@ -5107,8 +5655,10 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
   syncShopRow();
   syncFoodRewardRow();
   syncColorPresetPreview();
+  syncRandomBoxConfig();
 
   if (form.dataset.metaBound !== "true") {
+    itemNameInput?.addEventListener("input", syncRandomBoxConfig);
     picker?.addEventListener("spritechange", () => {
       syncCategory();
       syncFoodRewardRow();
@@ -5140,6 +5690,18 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
       });
     });
     sellInShopCheckbox?.addEventListener("change", syncShopRow);
+    randomBoxAddButton?.addEventListener("click", () => {
+      if (!(randomBoxRewardInput instanceof HTMLInputElement) || !(randomBoxSelector instanceof HTMLElement)) return;
+      const candidateId = String(randomBoxSelector.querySelector("[data-item-selector-input]")?.value || "").trim();
+      if (!candidateId) return;
+      const currentIds = normalizeRandomBoxRewardIds(randomBoxRewardInput.value);
+      if (!currentIds.includes(candidateId)) {
+        currentIds.push(candidateId);
+      }
+      randomBoxRewardInput.value = JSON.stringify(currentIds);
+      renderRandomBoxRewardList(form);
+      syncAdminItemSelector(randomBoxSelector, candidateId);
+    });
     customSpriteUpload?.addEventListener("change", async (event) => {
       const file = event.target.files?.[0];
       if (!file || !hiddenSpriteInput) return;
@@ -5176,6 +5738,7 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
     syncShopRow();
     syncFoodRewardRow();
     syncColorPresetPreview();
+    syncRandomBoxConfig();
   }
 }
 
