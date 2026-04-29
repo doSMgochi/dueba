@@ -4438,6 +4438,302 @@
         "path": "/assets/item-dots/도트배포_리프트라시르/마작/아카5통.png",
         "fallbackIcon": "🀄",
         "searchText": "마작 아카5통 도트배포_리프트라시르/마작/아카5통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑동",
+        "label": "흑동",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑동.png",
+        "fallbackIcon": "🀀",
+        "searchText": "마작 흑동 도트배포_리프트라시르/마작/흑동.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑남",
+        "label": "흑남",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑남.png",
+        "fallbackIcon": "🀁",
+        "searchText": "마작 흑남 도트배포_리프트라시르/마작/흑남.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑서",
+        "label": "흑서",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑서.png",
+        "fallbackIcon": "🀂",
+        "searchText": "마작 흑서 도트배포_리프트라시르/마작/흑서.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑북",
+        "label": "흑북",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑북.png",
+        "fallbackIcon": "🀃",
+        "searchText": "마작 흑북 도트배포_리프트라시르/마작/흑북.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑백",
+        "label": "흑백",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑백.png",
+        "fallbackIcon": "🀆",
+        "searchText": "마작 흑백 도트배포_리프트라시르/마작/흑백.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑발",
+        "label": "흑발",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑발.png",
+        "fallbackIcon": "🀅",
+        "searchText": "마작 흑발 도트배포_리프트라시르/마작/흑발.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑중",
+        "label": "흑중",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑중.png",
+        "fallbackIcon": "🀄",
+        "searchText": "마작 흑중 도트배포_리프트라시르/마작/흑중.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑1통",
+        "label": "흑1통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑1통.png",
+        "fallbackIcon": "🀙",
+        "searchText": "마작 흑1통 도트배포_리프트라시르/마작/흑1통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑2통",
+        "label": "흑2통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑2통.png",
+        "fallbackIcon": "🀚",
+        "searchText": "마작 흑2통 도트배포_리프트라시르/마작/흑2통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑3통",
+        "label": "흑3통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑3통.png",
+        "fallbackIcon": "🀛",
+        "searchText": "마작 흑3통 도트배포_리프트라시르/마작/흑3통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑4통",
+        "label": "흑4통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑4통.png",
+        "fallbackIcon": "🀜",
+        "searchText": "마작 흑4통 도트배포_리프트라시르/마작/흑4통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑5통",
+        "label": "흑5통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑5통.png",
+        "fallbackIcon": "🀝",
+        "searchText": "마작 흑5통 도트배포_리프트라시르/마작/흑5통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑6통",
+        "label": "흑6통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑6통.png",
+        "fallbackIcon": "🀞",
+        "searchText": "마작 흑6통 도트배포_리프트라시르/마작/흑6통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑7통",
+        "label": "흑7통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑7통.png",
+        "fallbackIcon": "🀟",
+        "searchText": "마작 흑7통 도트배포_리프트라시르/마작/흑7통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑8통",
+        "label": "흑8통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑8통.png",
+        "fallbackIcon": "🀠",
+        "searchText": "마작 흑8통 도트배포_리프트라시르/마작/흑8통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑9통",
+        "label": "흑9통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑9통.png",
+        "fallbackIcon": "🀡",
+        "searchText": "마작 흑9통 도트배포_리프트라시르/마작/흑9통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑1삭",
+        "label": "흑1삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑1삭.png",
+        "fallbackIcon": "🀐",
+        "searchText": "마작 흑1삭 도트배포_리프트라시르/마작/흑1삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑2삭",
+        "label": "흑2삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑2삭.png",
+        "fallbackIcon": "🀑",
+        "searchText": "마작 흑2삭 도트배포_리프트라시르/마작/흑2삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑3삭",
+        "label": "흑3삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑3삭.png",
+        "fallbackIcon": "🀒",
+        "searchText": "마작 흑3삭 도트배포_리프트라시르/마작/흑3삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑4삭",
+        "label": "흑4삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑4삭.png",
+        "fallbackIcon": "🀓",
+        "searchText": "마작 흑4삭 도트배포_리프트라시르/마작/흑4삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑5삭",
+        "label": "흑5삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑5삭.png",
+        "fallbackIcon": "🀔",
+        "searchText": "마작 흑5삭 도트배포_리프트라시르/마작/흑5삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑6삭",
+        "label": "흑6삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑6삭.png",
+        "fallbackIcon": "🀕",
+        "searchText": "마작 흑6삭 도트배포_리프트라시르/마작/흑6삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑7삭",
+        "label": "흑7삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑7삭.png",
+        "fallbackIcon": "🀖",
+        "searchText": "마작 흑7삭 도트배포_리프트라시르/마작/흑7삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑8삭",
+        "label": "흑8삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑8삭.png",
+        "fallbackIcon": "🀗",
+        "searchText": "마작 흑8삭 도트배포_리프트라시르/마작/흑8삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑9삭",
+        "label": "흑9삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑9삭.png",
+        "fallbackIcon": "🀘",
+        "searchText": "마작 흑9삭 도트배포_리프트라시르/마작/흑9삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑1만",
+        "label": "흑1만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑1만.png",
+        "fallbackIcon": "🀇",
+        "searchText": "마작 흑1만 도트배포_리프트라시르/마작/흑1만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑2만",
+        "label": "흑2만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑2만.png",
+        "fallbackIcon": "🀈",
+        "searchText": "마작 흑2만 도트배포_리프트라시르/마작/흑2만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑3만",
+        "label": "흑3만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑3만.png",
+        "fallbackIcon": "🀉",
+        "searchText": "마작 흑3만 도트배포_리프트라시르/마작/흑3만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑4만",
+        "label": "흑4만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑4만.png",
+        "fallbackIcon": "🀊",
+        "searchText": "마작 흑4만 도트배포_리프트라시르/마작/흑4만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑5만",
+        "label": "흑5만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑5만.png",
+        "fallbackIcon": "🀋",
+        "searchText": "마작 흑5만 도트배포_리프트라시르/마작/흑5만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑6만",
+        "label": "흑6만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑6만.png",
+        "fallbackIcon": "🀌",
+        "searchText": "마작 흑6만 도트배포_리프트라시르/마작/흑6만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑7만",
+        "label": "흑7만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑7만.png",
+        "fallbackIcon": "🀍",
+        "searchText": "마작 흑7만 도트배포_리프트라시르/마작/흑7만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑8만",
+        "label": "흑8만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑8만.png",
+        "fallbackIcon": "🀎",
+        "searchText": "마작 흑8만 도트배포_리프트라시르/마작/흑8만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑9만",
+        "label": "흑9만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑9만.png",
+        "fallbackIcon": "🀏",
+        "searchText": "마작 흑9만 도트배포_리프트라시르/마작/흑9만.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑아카5통",
+        "label": "흑아카5통",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑아카5통.png",
+        "fallbackIcon": "🀝",
+        "searchText": "마작 흑아카5통 도트배포_리프트라시르/마작/흑아카5통.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑아카5삭",
+        "label": "흑아카5삭",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑아카5삭.png",
+        "fallbackIcon": "🀔",
+        "searchText": "마작 흑아카5삭 도트배포_리프트라시르/마작/흑아카5삭.png"
+    },
+    {
+        "key": "도트배포_리프트라시르__마작__흑아카5만",
+        "label": "흑아카5만",
+        "category": "마작",
+        "path": "/assets/item-dots/도트배포_리프트라시르/마작/흑아카5만.png",
+        "fallbackIcon": "🀋",
+        "searchText": "마작 흑아카5만 도트배포_리프트라시르/마작/흑아카5만.png"
     }
 ];
 
@@ -4733,11 +5029,7 @@ function loadCustomItemSpriteCatalog() {
           searchText: `커스텀 ${label} ${path}`.toLowerCase(),
         };
       })
-      .filter(Boolean)
-      .filter((item) => {
-        const searchable = `${String(item?.label || "").trim()} ${String(item?.path || "").trim()}`;
-        return searchable.includes("날개");
-      });
+      .filter(Boolean);
     if (catalog.length !== parsed.length) {
       persistCustomItemSpriteCatalog(catalog);
     }
