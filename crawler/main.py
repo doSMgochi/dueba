@@ -68,9 +68,8 @@ TEAM_RESULT_ADD_BUTTON_XPATHS = [
     ".//button[contains(@data-track-key, 'button.add')]",
 ]
 TEAM_EXISTING_MEMBER_PATTERNS = [
-    "{friend_code}",
-    "{nickname}",
     "{character_name}",
+    "{nickname}",
 ]
 RECORD_ROW_SELECTORS = [
     "div.ant-table-content tbody.ant-table-tbody tr[data-row-key]",
@@ -95,12 +94,20 @@ def ensure_dirs() -> None:
 
 def configure_logging() -> None:
     ensure_dirs()
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     log_path = os.path.join(LOG_DIR, "crawler.log")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
-            logging.FileHandler(log_path, encoding="utf-8"),
+            logging.FileHandler(log_path, encoding="utf-8-sig"),
             logging.StreamHandler(sys.stdout),
         ],
     )
@@ -162,15 +169,12 @@ def create_driver(headless: bool):
     try:
         return uc.Chrome(options=build_driver_options(headless), use_subprocess=True)
     except SessionNotCreatedException:
-        if headless:
-            logging.warning("undetected_chromedriver headless 세션 생성에 실패해 일반 Chrome WebDriver로 재시도합니다.")
-            return webdriver.Chrome(options=build_driver_options(True))
-        logging.warning("일반 브라우저 세션 생성에 실패해 headless 모드로 재시도합니다.")
+        logging.warning("undetected_chromedriver 세션 생성에 실패해 일반 Chrome WebDriver로 재시도합니다.")
         try:
-            return uc.Chrome(options=build_driver_options(True), use_subprocess=True)
+            return webdriver.Chrome(options=build_driver_options(headless))
         except SessionNotCreatedException:
-            logging.warning("undetected_chromedriver 재시도에도 실패해 일반 Chrome WebDriver로 전환합니다.")
-            return webdriver.Chrome(options=build_driver_options(True))
+            logging.warning("일반 Chrome WebDriver 세션 생성에도 실패했습니다.")
+            raise
 
 
 class DuebaCrawler:
@@ -184,6 +188,14 @@ class DuebaCrawler:
         self.agreement_handled_at = 0.0
         self.saved_account_login_started = False
         self.agreement_submission_started_at = 0.0
+        self._existing_match_ids: Optional[set] = None
+
+    def _load_existing_match_ids(self) -> set:
+        if self._existing_match_ids is None:
+            snapshot = self.db.collection("match-results").select([]).stream()
+            self._existing_match_ids = {doc.id for doc in snapshot}
+            logging.info("기존 대국 결과 ID 캐시 로드 완료: %s건", len(self._existing_match_ids))
+        return self._existing_match_ids
 
     def close(self) -> None:
         try:
@@ -815,6 +827,7 @@ class DuebaCrawler:
         logging.info("팀 등록 동기화 시작: %s", contest.name)
         self.driver.get(contest.team_manager_url)
         time.sleep(4)
+        pending_by_faction: Dict[str, List[Dict[str, Any]]] = {faction: [] for faction in FACTIONS}
 
         for user in users:
             friend_code = user["friendCode"]
@@ -824,8 +837,8 @@ class DuebaCrawler:
                 self.update_team_status(
                     user["ref"],
                     contest.key,
-                    "invalid-friend-code",
-                    "친구코드가 비어 있거나 숫자가 아닙니다. 수정해주세요.",
+                    "skipped",
+                    "친구코드가 비어 있거나 테스트용 값으로 보여 이번 실행에서는 건너뛰었습니다.",
                 )
                 continue
 
@@ -842,25 +855,36 @@ class DuebaCrawler:
                 self.update_team_status(user["ref"], contest.key, "registered", "이미 팀에 등록되어 있어 건너뛰었습니다.")
                 continue
 
+            pending_by_faction[faction_name].append(user)
+
+        for faction_name, faction_users in pending_by_faction.items():
+            if not faction_users:
+                continue
+
             try:
-                added = self.try_add_team_member(faction_name, user)
-                if added:
+                result = self.try_add_team_members_batch(faction_name, faction_users)
+            except Exception as error:
+                logging.warning("팀 일괄 등록 처리 중 예외가 발생해 건너뜁니다: faction=%s error=%s", faction_name, error)
+                for user in faction_users:
+                    self.update_team_status(
+                        user["ref"],
+                        contest.key,
+                        "skipped",
+                        f"팀 일괄 등록 처리 중 예외가 있어 이번 실행에서는 건너뛰었습니다: {error}",
+                    )
+                continue
+
+            for user in faction_users:
+                friend_code = str(user["friendCode"]).strip()
+                if friend_code in result["success_codes"]:
                     self.update_team_status(user["ref"], contest.key, "registered", "팀 등록을 완료했습니다.")
                 else:
                     self.update_team_status(
                         user["ref"],
                         contest.key,
-                        "invalid-friend-code",
-                        "친구코드가 잘못 등록되어 있습니다. 수정해주세요.",
+                        "skipped",
+                        "친구코드 검색 결과가 없거나 추가 대상이 아니어서 이번 실행에서는 팀 등록을 건너뛰었습니다.",
                     )
-            except Exception as error:
-                logging.exception("팀 등록 처리 중 오류: %s", error)
-                self.update_team_status(
-                    user["ref"],
-                    contest.key,
-                    "error",
-                    f"팀 등록 처리 중 오류가 발생했습니다: {error}",
-                )
 
     def is_already_in_team(self, user: Dict[str, Any]) -> bool:
         page_text = self.driver.page_source
@@ -870,28 +894,35 @@ class DuebaCrawler:
                 nickname=user["nickname"],
                 character_name=user["characterName"],
             ).strip()
+            if pattern == "{nickname}" and len(value) < 2:
+                continue
             if value and value in page_text:
+                logging.info("기존 팀원으로 판단: character=%s matched_value=%r matched_by=%s", user["characterName"], value, pattern)
                 return True
         return False
 
-    def try_add_team_member(self, faction_name: str, user: Dict[str, Any]) -> bool:
+    def try_add_team_members_batch(self, faction_name: str, users: List[Dict[str, Any]]) -> Dict[str, set]:
+        self.ensure_team_modal_closed()
         panel = self.find_faction_panel(faction_name)
         if panel is None:
             raise RuntimeError(f"파벌 패널을 찾지 못했습니다: {faction_name}")
 
+        friend_codes = [str(user["friendCode"]).strip() for user in users if str(user.get("friendCode", "")).strip()]
+        if not friend_codes:
+            return {"success_codes": set(), "failure_codes": set()}
+
         add_button = self.find_descendant_xpath(panel, TEAM_ADD_BUTTON_XPATHS)
         if add_button is None:
             raise RuntimeError(f"팀원 추가 버튼을 찾지 못했습니다: {faction_name}")
-        add_button.click()
-        time.sleep(1.5)
+        logging.info("팀 일괄 등록 시작: faction=%s count=%s", faction_name, len(friend_codes))
+        self.safe_click(add_button, f"team_add_button_{faction_name}")
+        logging.info("팀 추가 모달 열기 클릭 완료: faction=%s", faction_name)
+        modal = self.wait_for_team_modal_open()
 
-        modal = self.find_first_css([
-            ".ant-modal-wrap .ant-modal",
-            ".ant-modal-root .ant-modal",
-        ])
         if modal is None:
             self.dump_debug_artifacts("team_modal_missing")
             raise RuntimeError("팀원 추가 모달을 찾지 못했습니다.")
+        logging.info("팀 추가 모달 열림 확인: faction=%s", faction_name)
 
         search_input = None
         for css in [
@@ -916,11 +947,8 @@ class DuebaCrawler:
             self.dump_debug_artifacts("team_search_selector_missing")
             raise RuntimeError("친구코드 검색 입력 영역을 찾지 못했습니다.")
 
-        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", search_input)
-        self.driver.execute_script("arguments[0].click();", search_input)
-        search_input.send_keys(Keys.CONTROL, "a")
-        search_input.send_keys(Keys.DELETE)
-        search_input.send_keys(str(user["friendCode"]))
+        self.fill_team_search_input(search_input, friend_codes)
+        logging.info("팀 일괄 검색 입력: faction=%s codes=%s", faction_name, ",".join(friend_codes))
         time.sleep(0.6)
 
         search_button = self.find_descendant_xpath(modal, TEAM_SEARCH_BUTTON_XPATHS)
@@ -939,17 +967,18 @@ class DuebaCrawler:
                 except Exception:
                     continue
             if not search_clicked:
-                logging.warning("팀 검색 버튼 클릭에 실패해 Enter 키로 대체합니다. friendCode=%s", user["friendCode"])
+                logging.warning("팀 검색 버튼 클릭에 실패해 Enter 키로 대체합니다. faction=%s", faction_name)
                 search_input.send_keys(Keys.ENTER)
         else:
             search_input.send_keys(Keys.ENTER)
+        logging.info("팀 일괄 검색 실행: faction=%s", faction_name)
 
         success_text = ""
         failure_text = ""
         disabled = True
         add_button = None
         wait_started = time.time()
-        while time.time() - wait_started < 10:
+        while time.time() - wait_started < 3:
             success_area = None
             failure_area = None
             try:
@@ -981,42 +1010,78 @@ class DuebaCrawler:
             if failure_text.strip() or success_text.strip() or (add_button is not None and not disabled):
                 break
 
-            time.sleep(0.4)
+            time.sleep(0.25)
 
         if add_button is None:
             logging.warning(
-                "팀 검색 후 추가 버튼을 찾지 못했습니다. friendCode=%s success=%r failure=%r",
-                user["friendCode"],
+                "팀 검색 후 추가 버튼을 찾지 못했습니다. faction=%s success=%r failure=%r",
+                faction_name,
                 success_text.strip(),
                 failure_text.strip(),
             )
             self.dump_debug_artifacts("team_search_no_add_button")
-            return False
+            self.close_team_modal()
+            return {
+                "success_codes": set(),
+                "failure_codes": set(friend_codes),
+            }
 
         if failure_text.strip() and not success_text.strip():
-            logging.warning(
-                "팀 검색 실패 텍스트가 감지되었습니다. friendCode=%s failure=%r",
-                user["friendCode"],
+            logging.info(
+                "팀 검색 결과가 없어 건너뜁니다. faction=%s failure=%r",
+                faction_name,
                 failure_text.strip(),
             )
-            return False
+            self.close_team_modal()
+            return {
+                "success_codes": set(),
+                "failure_codes": self.extract_friend_codes_from_text(failure_text) or set(friend_codes),
+            }
 
         if disabled and not success_text.strip():
-            logging.warning(
-                "팀 검색 결과가 비어 있거나 추가 버튼이 활성화되지 않았습니다. friendCode=%s success=%r failure=%r",
-                user["friendCode"],
+            logging.info(
+                "팀 검색 결과가 비어 있어 건너뜁니다. faction=%s success=%r failure=%r",
+                faction_name,
                 success_text.strip(),
                 failure_text.strip(),
             )
-            self.dump_debug_artifacts("team_search_no_result")
-            return False
+            self.close_team_modal()
+            return {
+                "success_codes": set(),
+                "failure_codes": self.extract_friend_codes_from_text(failure_text) or set(friend_codes),
+            }
 
         try:
-            add_button.click()
+            self.safe_click(add_button, f"team_result_add_button_{faction_name}")
         except Exception:
-            self.driver.execute_script("arguments[0].click();", add_button)
+            self.dump_debug_artifacts(f"team_result_add_click_failed_{faction_name}")
+            raise
         time.sleep(2)
-        return True
+        refreshed_textareas = self.find_modal_textareas()
+        if len(refreshed_textareas) >= 2:
+            success_text = refreshed_textareas[1].get_attribute("value") or success_text
+        if len(refreshed_textareas) >= 3:
+            failure_text = refreshed_textareas[2].get_attribute("value") or failure_text
+        success_codes = self.extract_friend_codes_from_text(success_text)
+        failure_codes = self.extract_friend_codes_from_text(failure_text)
+        logging.info(
+            "팀 일괄 검색 결과: faction=%s success_text=%r failure_text=%r success_codes=%s failure_codes=%s",
+            faction_name,
+            success_text.strip(),
+            failure_text.strip(),
+            ",".join(sorted(success_codes)),
+            ",".join(sorted(failure_codes)),
+        )
+        self.close_team_modal()
+        if not success_codes and not failure_codes:
+            return {
+                "success_codes": set(friend_codes),
+                "failure_codes": set(),
+            }
+        return {
+            "success_codes": success_codes,
+            "failure_codes": failure_codes,
+        }
 
     def find_faction_panel(self, faction_name: str):
         for xpath in [
@@ -1047,7 +1112,7 @@ class DuebaCrawler:
     def sync_match_results(self, contest: ContestConfig) -> None:
         logging.info("대국 결과 동기화 시작: %s", contest.name)
         self.driver.get(contest.record_url)
-        time.sleep(6)
+        self.wait_for_record_table()
         rows = self.extract_record_rows(contest.player_count)
         inserted = 0
         skipped = 0
@@ -1055,14 +1120,14 @@ class DuebaCrawler:
         if not rows:
             self.dump_debug_artifacts(f"match_rows_empty_{contest.key}")
 
+        existing_ids = self._load_existing_match_ids()
         for row in rows:
             doc_id = self.build_match_doc_id(contest.key, row["createdAtText"])
-            doc_ref = self.db.collection("match-results").document(doc_id)
-            if doc_ref.get().exists:
+            if doc_id in existing_ids:
                 skipped += 1
                 continue
 
-            doc_ref.set(
+            self.db.collection("match-results").document(doc_id).set(
                 {
                     "mode": contest.key,
                     "contestName": contest.name,
@@ -1074,6 +1139,7 @@ class DuebaCrawler:
                     "scrapedAt": firestore.SERVER_TIMESTAMP,
                 }
             )
+            existing_ids.add(doc_id)
             inserted += 1
 
         logging.info("대국 결과 동기화 완료: contest=%s inserted=%s skipped=%s", contest.name, inserted, skipped)
@@ -1082,7 +1148,17 @@ class DuebaCrawler:
         html = self.driver.page_source
         soup = BeautifulSoup(html, "html.parser")
 
-        tbody = soup.select_one("tbody.ant-table-tbody") or soup.select_one("tbody")
+        table_candidates = soup.select(".ant-table-wrapper")
+        primary_table = None
+        for table in table_candidates:
+            title = table.find_previous(["h1", "h2", "h3"])
+            title_text = " ".join(title.get_text(" ", strip=True).split()) if title else ""
+            if "赛事牌谱" in title_text:
+                primary_table = table
+                break
+
+        primary_scope = primary_table or soup
+        tbody = primary_scope.select_one("tbody.ant-table-tbody") or primary_scope.select_one("tbody")
         if tbody is None:
             logging.warning("대국 결과 테이블을 찾지 못했습니다.")
             self.dump_debug_artifacts(f"match_table_missing_{player_count}p")
@@ -1232,6 +1308,184 @@ class DuebaCrawler:
             except Exception:
                 continue
         return None
+
+    def extract_friend_codes_from_text(self, text: str) -> set:
+        matches = re.findall(r"\b\d+\b", str(text or ""))
+        return {match.strip() for match in matches if match.strip()}
+
+    def wait_for_team_modal_open(self):
+        deadline = time.time() + 4
+        while time.time() < deadline:
+            modal = self.find_first_css([
+                ".ant-modal-wrap .ant-modal",
+                ".ant-modal-root .ant-modal",
+            ])
+            if modal is not None:
+                return modal
+            time.sleep(0.2)
+        return None
+
+    def is_team_modal_open(self) -> bool:
+        return self.find_first_css([
+            ".ant-modal-wrap .ant-modal",
+            ".ant-modal-root .ant-modal",
+        ]) is not None
+
+    def ensure_team_modal_closed(self) -> None:
+        if self.is_team_modal_open():
+            self.close_team_modal()
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if not self.is_team_modal_open():
+                return
+            time.sleep(0.2)
+
+    def find_modal_textareas(self):
+        modal = self.find_first_css([
+            ".ant-modal-wrap .ant-modal",
+            ".ant-modal-root .ant-modal",
+        ])
+        if modal is None:
+            return []
+        try:
+            return modal.find_elements(By.CSS_SELECTOR, ".ant-modal-body textarea")
+        except Exception:
+            return []
+
+    def fill_team_search_input(self, element, friend_codes: List[str]) -> None:
+        payload = "\n".join(friend_codes)
+        try:
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script(
+                """
+                const target = arguments[0];
+                const value = arguments[1];
+                target.removeAttribute('readonly');
+                target.focus();
+                target.value = '';
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.value = value;
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                """,
+                element,
+                payload,
+            )
+            return
+        except Exception:
+            pass
+
+        self.driver.execute_script("arguments[0].click();", element)
+        element.send_keys(Keys.CONTROL, "a")
+        element.send_keys(Keys.DELETE)
+        element.send_keys(payload)
+
+    def close_team_modal(self) -> None:
+        close_button = self.find_first_css([
+            ".ant-modal-wrap .ant-modal-close",
+            ".ant-modal-root .ant-modal-close",
+        ])
+        if close_button is not None:
+            try:
+                self.safe_click(close_button, "team_modal_close_button")
+                deadline = time.time() + 2
+                while time.time() < deadline:
+                    if not self.is_team_modal_open():
+                        return
+                    time.sleep(0.2)
+            except Exception:
+                pass
+
+        try:
+            ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                if not self.is_team_modal_open():
+                    return
+                time.sleep(0.2)
+        except Exception:
+            pass
+
+    def safe_click(self, element, debug_label: str = "click_target") -> None:
+        self.hide_sticky_overlays()
+        click_errors = []
+        for mode in ("js", "actions", "normal"):
+            try:
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            except Exception:
+                pass
+            time.sleep(0.2)
+
+            try:
+                if mode == "js":
+                    self.driver.execute_script("arguments[0].click();", element)
+                elif mode == "actions":
+                    ActionChains(self.driver).move_to_element(element).pause(0.2).click(element).perform()
+                else:
+                    element.click()
+                return
+            except Exception as error:
+                click_errors.append(f"{mode}: {error}")
+
+        self.dump_debug_artifacts(debug_label)
+        raise RuntimeError(f"클릭에 실패했습니다: {debug_label} / {' | '.join(click_errors)}")
+
+    def hide_sticky_overlays(self) -> None:
+        try:
+            self.driver.execute_script(
+                """
+                const selectors = [
+                    '#dmm_container',
+                    '#dmm_placeholder',
+                    'header.ant-layout-header',
+                    '.seasonMenuHeader-0-2-63',
+                ];
+                selectors.forEach((selector) => {
+                    document.querySelectorAll(selector).forEach((node) => {
+                        node.style.pointerEvents = 'none';
+                    });
+                });
+                """
+            )
+        except Exception:
+            pass
+
+    def wait_for_record_table(self) -> None:
+        deadline = time.time() + 20
+        refresh_button = self.find_first_xpath([
+            "//button[@data-track-key='ui.page.label.game_record,ui.page.button.refresh']",
+            "//span[contains(., '刷新')]/ancestor::button[1]",
+            "//span[contains(., '새로')]/ancestor::button[1]",
+        ])
+
+        while time.time() < deadline:
+            html = self.driver.page_source
+            if "暂无数据" in html or self.has_record_rows():
+                return
+            time.sleep(1)
+
+        if refresh_button is not None:
+            try:
+                self.safe_click(refresh_button, "record_refresh_button")
+            except Exception:
+                logging.warning("대국 결과 새로고침 버튼 클릭에 실패했습니다.")
+            time.sleep(4)
+
+    def has_record_rows(self) -> bool:
+        for selector in RECORD_ROW_SELECTORS:
+            try:
+                rows = self.driver.find_elements(By.CSS_SELECTOR, selector)
+            except Exception:
+                rows = []
+            for row in rows:
+                classes = " ".join(row.get_attribute("class").split()) if row.get_attribute("class") else ""
+                if "placeholder" not in classes:
+                    return True
+        return False
 
     def dump_debug_artifacts(self, prefix: str) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

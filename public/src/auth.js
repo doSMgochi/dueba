@@ -51,6 +51,10 @@ const returnProfileDecorationToInventoryCallable = httpsCallable(functions, "ret
 const listAdminLogsCallable = httpsCallable(functions, "listAdminLogs");
 const listBugReportsCallable = httpsCallable(functions, "listBugReports");
 const claimActiveSessionCallable = httpsCallable(functions, "claimActiveSession");
+const getRankingTerritoryAdminSettingsCallable = httpsCallable(functions, "getRankingTerritoryAdminSettings");
+const updateRankingTerritoryAdminSettingsCallable = httpsCallable(functions, "updateRankingTerritoryAdminSettings");
+const saveRankingSnapshotCallable = httpsCallable(functions, "saveRankingSnapshot");
+const clearPastRankingSnapshotsCallable = httpsCallable(functions, "clearPastRankingSnapshots");
 const allowedFactions = ["매화", "난초", "국화", "대나무"];
 const ACTIVE_SESSION_STORAGE_KEY = "mahjong-admin-active-session-id";
 let activeSessionUnsubscribe = null;
@@ -60,14 +64,7 @@ let pendingAuthSignOutReason = "";
 
 window.addEventListener("dueba-session-conflict", async () => {
   if (!auth.currentUser || isSigningOutForSessionConflict) return;
-  isSigningOutForSessionConflict = true;
-  pendingAuthSignOutReason = "session-conflict";
-  clearActiveSessionWatcher();
-  try {
-    await signOut(auth);
-  } finally {
-    isSigningOutForSessionConflict = false;
-  }
+  console.warn("Ignoring dueba-session-conflict event to preserve current session.");
 });
 
 function normalizeLoginId(loginId) {
@@ -243,16 +240,11 @@ function watchActiveSession(profile, onConflict) {
     if (!hasSeenLocalSession) {
       return;
     }
-
-    isSigningOutForSessionConflict = true;
-    pendingAuthSignOutReason = "session-conflict";
-    clearActiveSessionWatcher();
-    try {
-      await signOut(auth);
-      onConflict?.();
-    } finally {
-      isSigningOutForSessionConflict = false;
-    }
+    console.warn("Ignoring activeSessionId mismatch to preserve current session.", {
+      localSessionId,
+      remoteActiveSessionId: activeSessionId,
+    });
+    onConflict?.();
   });
 }
 
@@ -410,6 +402,7 @@ export async function requestPasswordResetEmail(email) {
 }
 
 export async function logoutUser() {
+  pendingAuthSignOutReason = "manual-logout";
   clearActiveSessionWatcher();
   clearCurrentProfileWatcher();
   await signOut(auth);
@@ -434,9 +427,39 @@ export async function refreshCurrentUserProfile() {
 export function onSignedInUserChanged(callback) {
   return onAuthStateChanged(auth, async (user) => {
     if (!user) {
+      const signOutReason = consumeAuthSignOutReason();
+      if (signOutReason !== "session-conflict") {
+        await new Promise((resolve) => window.setTimeout(resolve, 350));
+        if (auth.currentUser) {
+          try {
+            const recoveredProfile = await refreshCurrentUserProfile();
+            watchActiveSession(recoveredProfile);
+            clearCurrentProfileWatcher();
+            if (recoveredProfile?.docId) {
+              currentProfileUnsubscribe = onSnapshot(doc(db, "users", recoveredProfile.docId), (snapshot) => {
+                if (!snapshot.exists()) return;
+                callback({
+                  docId: snapshot.id,
+                  ...snapshot.data(),
+                });
+              });
+            }
+            callback(recoveredProfile);
+            return;
+          } catch (recoveryError) {
+            console.error("Failed to recover profile after transient auth null event", recoveryError);
+          }
+        }
+      }
+
+      if (!signOutReason) {
+        console.warn("Ignoring auth null event without explicit sign-out reason.");
+        return;
+      }
+
       clearActiveSessionWatcher();
       clearCurrentProfileWatcher();
-      callback(null, { reason: consumeAuthSignOutReason() });
+      callback(null, { reason: signOutReason });
       return;
     }
 
@@ -458,7 +481,39 @@ export function onSignedInUserChanged(callback) {
     } catch (error) {
       console.error(error);
       clearCurrentProfileWatcher();
-      callback(null);
+      if (!auth.currentUser) {
+        const signOutReason = consumeAuthSignOutReason();
+        if (signOutReason) {
+          clearActiveSessionWatcher();
+          callback(null, { reason: signOutReason });
+        } else {
+          console.warn("Ignoring signed-out auth state without explicit sign-out reason after recovery failure.");
+        }
+        return;
+      }
+      try {
+        const fallbackProfile = await refreshCurrentUserProfile();
+        watchActiveSession(fallbackProfile);
+        if (fallbackProfile?.docId) {
+          currentProfileUnsubscribe = onSnapshot(doc(db, "users", fallbackProfile.docId), (snapshot) => {
+            if (!snapshot.exists()) return;
+            callback({
+              docId: snapshot.id,
+              ...snapshot.data(),
+            });
+          });
+        }
+        callback(fallbackProfile);
+      } catch (fallbackError) {
+        console.error("Failed to recover signed-in user state", fallbackError);
+        const signOutReason = consumeAuthSignOutReason();
+        if (signOutReason) {
+          clearActiveSessionWatcher();
+          callback(null, { reason: signOutReason });
+        } else {
+          console.warn("Keeping current dashboard state because no explicit sign-out reason was provided.");
+        }
+      }
     }
   });
 }
@@ -472,67 +527,16 @@ export async function selectTrait(traitId) {
   }
 }
 
-export async function getRankingBoard() {
+export async function getRankingBoard(date = "") {
   try {
-    const [userSnapshot, traitSnapshot] = await Promise.all([
-      getDocs(collection(db, "users")),
-      getDocs(collection(db, "traits")),
-    ]);
-
-    const traitPointMap = new Map(
-      traitSnapshot.docs.map((item) => [item.id, Number(item.data().requiredPoints || 0)])
-    );
-
-    const preferredUsers = Array.from(
-      userSnapshot.docs.reduce((map, item) => {
-        const data = item.data();
-        const key = String(data.uid || item.id || "").trim();
-        const current = map.get(key);
-        const score = item.id === data.characterName ? 2 : item.id !== data.uid ? 1 : 0;
-        if (!current || score > current.score) {
-          map.set(key, { score, item, data });
-        }
-        return map;
-      }, new Map()).values()
-    );
-
-    return preferredUsers
-      .map(({ item, data }) => {
-        const selectedTraitIds = Array.isArray(data.selectedTraitIds) ? data.selectedTraitIds : [];
-        const usedTraitPoints = selectedTraitIds.reduce(
-          (sum, traitId) => sum + Number(traitPointMap.get(traitId) || 0),
-          0
-        );
-
-        return {
-          uid: data.uid || "",
-          characterName: data.characterName || item.id,
-          nickname: data.nickname || "-",
-          profileTitle: String(data.profileTitle || "").trim(),
-          characterNameColorPreset: String(data.characterNameColorPreset || "").trim(),
-          rankingPoints: Number(data.rankingPoints || 0),
-          currency: Number(data.currency || 0),
-          factionName: String(data.factionName || "").trim(),
-          factionDisguiseName: String(data.factionDisguiseName || "").trim(),
-          factionDisguiseUntil: String(data.factionDisguiseUntil || "").trim(),
-          inventoryTypeCount: Array.from(
-            new Set(
-              (Array.isArray(data.inventory) ? data.inventory : [])
-                .map((inventoryItem) => inventoryItem?.itemId || inventoryItem?.name || "")
-                .filter(Boolean)
-            )
-          ).length,
-          totalTraitPoints: Number(data.availableTraitPoints || 0) + usedTraitPoints,
-        };
-      })
-      .sort((left, right) => right.rankingPoints - left.rankingPoints);
-  } catch (error) {
-    try {
-      const result = await getRankingBoardCallable();
-      return result.data.rankings || [];
-    } catch (fallbackError) {
-      throw toFriendlyError(fallbackError);
+    const payload = {};
+    if (String(date || "").trim()) {
+      payload.date = String(date || "").trim();
     }
+    const result = await getRankingBoardCallable(payload);
+    return result.data || {};
+  } catch (error) {
+    throw toFriendlyError(error);
   }
 }
 
@@ -952,6 +956,42 @@ export async function listAdminLogs({ kind, page = 0, pageSize = 5 }) {
   try {
     const result = await listAdminLogsCallable({ kind, page, pageSize });
     return result.data;
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function getRankingTerritoryAdminSettings() {
+  try {
+    const result = await getRankingTerritoryAdminSettingsCallable({});
+    return result.data || {};
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function updateRankingTerritoryAdminSettings(action, payload = {}) {
+  try {
+    const result = await updateRankingTerritoryAdminSettingsCallable({ action, payload });
+    return result.data || {};
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function saveRankingSnapshot(dateKey) {
+  try {
+    const result = await saveRankingSnapshotCallable({ dateKey });
+    return result.data || {};
+  } catch (error) {
+    throw toFriendlyError(error);
+  }
+}
+
+export async function clearPastRankingSnapshots() {
+  try {
+    const result = await clearPastRankingSnapshotsCallable({});
+    return result.data || {};
   } catch (error) {
     throw toFriendlyError(error);
   }

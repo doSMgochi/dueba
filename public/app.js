@@ -167,6 +167,10 @@ menuTabs.addEventListener("click", (event) => {
 
 onSignedInUserChanged((profile, meta = {}) => {
   const isLoggedIn = Boolean(profile);
+  if (!isLoggedIn && !meta?.reason && dashboardState.profile) {
+    console.warn("Ignoring null profile event without explicit sign-out reason.");
+    return;
+  }
   authView.classList.toggle("hidden", isLoggedIn);
   dashboardView.classList.toggle("hidden", !isLoggedIn);
 

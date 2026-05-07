@@ -21,6 +21,23 @@ const defaultTraits = [
   { id: "hidden-trait", name: "특성 비공개", successPoints: 0, failPoints: 0, requiredPoints: 10, sortOrder: 4 },
 ];
 const allowedFactions = new Set(["매화", "난초", "국화", "대나무"]);
+const factionOrder = ["매화", "난초", "국화", "대나무"];
+const contestedTerritoryOwner = "__contested__";
+const rankingModeDefinitions = {
+  "ranked-4p-hanchan": {
+    label: "4인 마작",
+    playerCount: 4,
+    pointsByPlace: [30, 10, -10, -30],
+  },
+  "ranked-3p-hanchan": {
+    label: "3인 마작",
+    playerCount: 3,
+    pointsByPlace: [15, 0, -15],
+  },
+};
+const territoryShapeSeed = "dueba-territory-shape-v1";
+const territoryCellCount = 100;
+const rankingTerritoryConfigDocPath = ["system-config", "ranking-territory"];
 const YACHT_MAX_PLAYERS = 4;
 const YACHT_DICE_COUNT = 5;
 const YACHT_ROLL_ANIMATION_MS = 3400;
@@ -157,7 +174,9 @@ exports.findLoginIdByEmail = onCall(async (request) => {
     throw new HttpsError("not-found", "가입된 계정을 찾지 못했습니다.");
   }
 
-  return { loginId: String(snapshot.docs[0].data().loginId || "") };
+  const loginId = String(snapshot.docs[0].data().loginId || "");
+  const maskedLoginId = loginId.length <= 2 ? "*".repeat(loginId.length) : loginId[0] + "*".repeat(loginId.length - 2) + loginId[loginId.length - 1];
+  return { loginId: maskedLoginId };
 });
 
 exports.claimActiveSession = onCall(async (request) => {
@@ -231,52 +250,324 @@ exports.getDashboardData = onCall(async (request) => {
 exports.getRankingBoard = onCall(async (request) => {
   assertAuthenticated(request);
   await ensureGlobalGameData();
+  const selectedDateInput = String(request.data?.date || "").trim();
+  const todayDateKey = getSeoulDateKey(new Date());
+  const isPastDate = selectedDateInput && selectedDateInput < todayDateKey;
 
-  const [userSnapshot, traitSnapshot] = await Promise.all([
+  if (isPastDate) {
+    const [snapshotDoc, snapshotListSnapshot] = await Promise.all([
+      db.collection("ranking-snapshots").doc(selectedDateInput).get(),
+      db.collection("ranking-snapshots").select().get(),
+    ]);
+    if (snapshotDoc.exists) {
+      const snapshotDateKeys = snapshotListSnapshot.docs.map((doc) => doc.id).filter((id) => /^\d{4}-\d{2}-\d{2}$/.test(id));
+      const data = snapshotDoc.data();
+      const baseDates = Array.isArray(data.availableDates) ? data.availableDates : [];
+      const mergedDates = [...new Set([todayDateKey, ...baseDates, ...snapshotDateKeys])].sort().reverse();
+      return { ...data, selectedDate: selectedDateInput, availableDates: mergedDates };
+    }
+  }
+
+  const [userSnapshot, traitSnapshot, matchSnapshot, rankingTerritoryConfigSnapshot, snapshotListSnapshot] = await Promise.all([
     db.collection("users").get(),
     db.collection("traits").get(),
+    db.collection("match-results").limit(10000).get(),
+    getRankingTerritoryConfigRef().get(),
+    db.collection("ranking-snapshots").select().get(),
+  ]);
+
+  const traitPointMap = new Map(
+    traitSnapshot.docs.map((item) => [item.id, Number(item.data().requiredPoints || 0)])
+  );
+  const users = buildPreferredUsers(userSnapshot, traitPointMap);
+  const adminConfig = normalizeRankingTerritoryConfig(rankingTerritoryConfigSnapshot.data());
+  const rankingPayload = buildRankingPayload({
+    users,
+    matchDocs: matchSnapshot.docs,
+    selectedDateInput,
+    adminConfig,
+  });
+  await persistRegularPermanentClaimTotals(getRankingTerritoryConfigRef(), adminConfig, rankingPayload.regularComputedClaimTotals);
+
+  const snapshotDateKeys = snapshotListSnapshot.docs.map((doc) => doc.id).filter((id) => /^\d{4}-\d{2}-\d{2}$/.test(id));
+  const mergedDates = [...new Set([...rankingPayload.availableDates, ...snapshotDateKeys])].sort().reverse();
+  return { ...rankingPayload, availableDates: mergedDates };
+});
+
+async function doSaveRankingSnapshot(dateKey) {
+  const todayDateKey = getSeoulDateKey(new Date());
+  const [userSnapshot, traitSnapshot, matchSnapshot, rankingTerritoryConfigSnapshot] = await Promise.all([
+    db.collection("users").get(),
+    db.collection("traits").get(),
+    db.collection("match-results").limit(10000).get(),
+    getRankingTerritoryConfigRef().get(),
   ]);
   const traitPointMap = new Map(
     traitSnapshot.docs.map((item) => [item.id, Number(item.data().requiredPoints || 0)])
   );
+  const users = buildPreferredUsers(userSnapshot, traitPointMap);
+  const adminConfig = normalizeRankingTerritoryConfig(rankingTerritoryConfigSnapshot.data());
+  const rankingPayload = buildRankingPayload({
+    users,
+    matchDocs: matchSnapshot.docs,
+    selectedDateInput: todayDateKey,
+    adminConfig,
+  });
+  await db.collection("ranking-snapshots").doc(dateKey).set({
+    ...rankingPayload,
+    selectedDate: dateKey,
+    selectedDateLabel: dateKey,
+    snapshotSavedAt: FieldValue.serverTimestamp(),
+  });
+}
 
-  const preferredUsers = Array.from(
-    userSnapshot.docs.reduce((map, item) => {
-      const data = item.data();
-      const key = String(data.uid || item.id || "").trim();
-      const current = map.get(key);
-      const score = item.id === data.characterName ? 2 : item.id !== data.uid ? 1 : 0;
-      if (!current || score > current.score) {
-        map.set(key, { score, item, data });
+exports.saveRankingSnapshot = onCall(async (request) => {
+  assertAuthenticated(request);
+  await assertAdmin(request.auth.uid);
+  const dateKey = String(request.data?.dateKey || "").trim();
+  if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    throw new HttpsError("invalid-argument", "올바른 날짜(YYYY-MM-DD)를 입력해 주세요.");
+  }
+  const todayDateKey = getSeoulDateKey(new Date());
+  if (dateKey >= todayDateKey) {
+    throw new HttpsError("invalid-argument", "오늘 이전 날짜만 박제할 수 있습니다.");
+  }
+  await doSaveRankingSnapshot(dateKey);
+  return { success: true, dateKey };
+});
+
+// 매일 한국 자정(UTC 15:00)에 전날 랭킹 자동 박제
+exports.autoSaveRankingSnapshot = onSchedule(
+  { schedule: "0 15 * * *", timeZone: "UTC", region: "asia-northeast3" },
+  async () => {
+    await ensureGlobalGameData();
+    const now = new Date();
+    // 한국 자정 직후이므로 "어제" = 한국 기준 전날
+    const seoulYesterday = new Date(now.getTime() + 9 * 60 * 60 * 1000 - 24 * 60 * 60 * 1000);
+    const yyyy = seoulYesterday.getUTCFullYear();
+    const mm = String(seoulYesterday.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(seoulYesterday.getUTCDate()).padStart(2, "0");
+    const dateKey = `${yyyy}-${mm}-${dd}`;
+    const existing = await db.collection("ranking-snapshots").doc(dateKey).get();
+    if (!existing.exists) {
+      await doSaveRankingSnapshot(dateKey);
+    }
+  }
+);
+
+exports.clearPastRankingSnapshots = onCall(async (request) => {
+  assertAuthenticated(request);
+  await assertAdmin(request.auth.uid);
+  const todayDateKey = getSeoulDateKey(new Date());
+  const snapshotDocs = await db.collection("ranking-snapshots").get();
+  const batch = db.batch();
+  let count = 0;
+  snapshotDocs.docs.forEach((doc) => {
+    if (doc.id < todayDateKey) {
+      batch.delete(doc.ref);
+      count++;
+    }
+  });
+  if (count > 0) {
+    await batch.commit();
+  }
+  return { success: true, deletedCount: count };
+});
+
+exports.getRankingTerritoryAdminSettings = onCall(async (request) => {
+  assertAuthenticated(request);
+  await assertAdmin(request.auth.uid);
+  const snapshot = await getRankingTerritoryConfigRef().get();
+  return {
+    config: normalizeRankingTerritoryConfig(snapshot.data()),
+  };
+});
+
+exports.updateRankingTerritoryAdminSettings = onCall(async (request) => {
+  assertAuthenticated(request);
+  const adminProfile = await assertAdmin(request.auth.uid);
+  await ensureGlobalGameData();
+
+  const action = String(request.data?.action || "").trim();
+  const payload = request.data?.payload && typeof request.data.payload === "object" ? request.data.payload : {};
+  if (!action) {
+    throw new HttpsError("invalid-argument", "Action is required.");
+  }
+
+  const configRef = getRankingTerritoryConfigRef();
+  const configSnapshot = await configRef.get();
+  const currentConfig = normalizeRankingTerritoryConfig(configSnapshot.data());
+  const nextConfig = JSON.parse(JSON.stringify(currentConfig));
+  const loggedAt = new Date();
+  const logPayload = {
+    kind: "territory-admin",
+    adminUid: adminProfile.uid,
+    adminCharacterName: adminProfile.characterName,
+    action,
+    createdAt: FieldValue.serverTimestamp(),
+    createdAtText: loggedAt.toLocaleString("ko-KR"),
+  };
+
+  if (action === "grant-regular-points") {
+    const periodKey = String(payload.periodKey || "").trim();
+    const factionName = String(payload.factionName || "").trim();
+    const delta = Math.trunc(Number(payload.delta || 0));
+    const note = String(payload.note || "").trim();
+    if (!periodKey || !allowedFactions.has(factionName) || !delta) {
+      throw new HttpsError("invalid-argument", "정규전 점수 조정값을 확인해 주세요.");
+    }
+    nextConfig.regularPointAdjustments.push({
+      id: randomUUID(),
+      periodKey,
+      factionName,
+      delta,
+      note,
+      createdAtMs: Date.now(),
+    });
+    logPayload.targetCharacterName = factionName;
+    logPayload.currencyDelta = 0;
+    logPayload.traitPointDelta = 0;
+    logPayload.note = `${periodKey} ${factionName} ${delta > 0 ? "+" : ""}${delta}점`;
+  } else if (action === "transfer-regular-cells") {
+    const rawCellNumbers = Array.isArray(payload.cellNumbers)
+      ? payload.cellNumbers
+      : String(payload.cellNumbers || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean);
+    const cellNumbers = [...new Set(rawCellNumbers
+      .map((item) => Math.trunc(Number(item)))
+      .filter((item) => Number.isFinite(item) && item >= 1 && item <= territoryCellCount))]
+      .sort((left, right) => left - right);
+    const rawTargetFaction = String(payload.targetFaction || "").trim();
+    const targetFaction = allowedFactions.has(rawTargetFaction) ? rawTargetFaction : "";
+    if (!cellNumbers.length || (rawTargetFaction && !allowedFactions.has(rawTargetFaction))) {
+      throw new HttpsError("invalid-argument", "이동할 칸과 대상 진영을 확인해 주세요.");
+    }
+    const board = await buildCurrentRankingBoardForAdmin(currentConfig);
+    if (String(board?.currentPhase || board?.phase || "") !== "regular") {
+      throw new HttpsError("failed-precondition", "정규전에서만 땅 소유권을 직접 변경할 수 있습니다.");
+    }
+    const cellsById = new Map(
+      Array.isArray(board?.territory?.cells)
+        ? board.territory.cells.map((cell) => [String(cell.id || "").trim(), cell])
+        : []
+    );
+    const transferNotes = [];
+    cellNumbers.forEach((cellNumber) => {
+      const cellId = `cell-${cellNumber}`;
+      const currentCell = cellsById.get(cellId);
+      const sourceFaction = String(currentCell?.ownerFaction || "").trim();
+      if (sourceFaction === targetFaction) {
+        return;
       }
-      return map;
-    }, new Map()).values()
-  );
+      if (targetFaction) {
+        nextConfig.territoryCellAssignments[cellId] = targetFaction;
+      } else {
+        delete nextConfig.territoryCellAssignments[cellId];
+      }
+      if (allowedFactions.has(sourceFaction)) {
+        nextConfig.manualShareAdjustments[sourceFaction] = roundTerritoryValue(Number(nextConfig.manualShareAdjustments[sourceFaction] || 0) - 1);
+      }
+      if (targetFaction) {
+        nextConfig.manualShareAdjustments[targetFaction] = roundTerritoryValue(Number(nextConfig.manualShareAdjustments[targetFaction] || 0) + 1);
+      }
+      transferNotes.push(`${cellId} ${sourceFaction || "빈 땅"} -> ${targetFaction || "빈 땅"}`);
+    });
+    if (!transferNotes.length) {
+      return { ok: true, config: currentConfig };
+    }
+    logPayload.targetCharacterName = `${cellNumbers.length}칸`;
+    logPayload.note = transferNotes.join(", ");
+  } else if (action === "transfer-regular-cell") {
+    const cellNumber = Math.max(1, Math.min(territoryCellCount, Math.trunc(Number(payload.cellNumber || 0))));
+    const rawTargetFaction = String(payload.targetFaction || "").trim();
+    const targetFaction = allowedFactions.has(rawTargetFaction) ? rawTargetFaction : "";
+    if (!cellNumber || (rawTargetFaction && !allowedFactions.has(rawTargetFaction))) {
+      throw new HttpsError("invalid-argument", "이동할 칸과 대상 진영을 확인해 주세요.");
+    }
+    const board = await buildCurrentRankingBoardForAdmin(currentConfig);
+    if (String(board?.currentPhase || board?.phase || "") !== "regular") {
+      throw new HttpsError("failed-precondition", "정규전에서만 땅 소유권을 직접 변경할 수 있습니다.");
+    }
+    const cellId = `cell-${cellNumber}`;
+    const currentCell = Array.isArray(board?.territory?.cells)
+      ? board.territory.cells.find((cell) => String(cell.id || "") === cellId)
+      : null;
+    const sourceFaction = String(currentCell?.ownerFaction || "").trim();
+    if (sourceFaction === targetFaction) {
+      return { ok: true, config: currentConfig };
+    }
+    if (targetFaction) {
+      nextConfig.territoryCellAssignments[cellId] = targetFaction;
+    } else {
+      delete nextConfig.territoryCellAssignments[cellId];
+    }
+    if (allowedFactions.has(sourceFaction)) {
+      nextConfig.manualShareAdjustments[sourceFaction] = roundTerritoryValue(Number(nextConfig.manualShareAdjustments[sourceFaction] || 0) - 1);
+    }
+    if (targetFaction) {
+      nextConfig.manualShareAdjustments[targetFaction] = roundTerritoryValue(Number(nextConfig.manualShareAdjustments[targetFaction] || 0) + 1);
+    }
+    logPayload.targetCharacterName = `${cellId}`;
+    logPayload.note = `${cellId} ${sourceFaction || "빈 땅"} -> ${targetFaction || "빈 땅"}`;
+  } else if (action === "adjust-war-share") {
+    const factionName = String(payload.factionName || "").trim();
+    const delta = roundTerritoryValue(Number(payload.delta || 0));
+    const note = String(payload.note || "").trim();
+    const board = await buildCurrentRankingBoardForAdmin(currentConfig);
+    if (String(board?.currentPhase || board?.phase || "") !== "war") {
+      throw new HttpsError("failed-precondition", "쟁탈전에서만 진영 비율을 직접 조정할 수 있습니다.");
+    }
+    if (!allowedFactions.has(factionName) || !delta) {
+      throw new HttpsError("invalid-argument", "조정할 진영과 비율을 확인해 주세요.");
+    }
+    nextConfig.manualShareAdjustments[factionName] = roundTerritoryValue(Number(nextConfig.manualShareAdjustments[factionName] || 0) + delta);
+    logPayload.targetCharacterName = factionName;
+    logPayload.note = `${factionName} ${delta > 0 ? "+" : ""}${delta}%`;
+  } else if (action === "transfer-war-share") {
+    const sourceFaction = String(payload.sourceFaction || "").trim();
+    const targetFaction = String(payload.targetFaction || "").trim();
+    const delta = roundTerritoryValue(Number(payload.delta || 0));
+    const note = String(payload.note || "").trim();
+    const board = await buildCurrentRankingBoardForAdmin(currentConfig);
+    if (String(board?.currentPhase || board?.phase || "") !== "war") {
+      throw new HttpsError("failed-precondition", "쟁탈전에서만 진영 비율을 양도할 수 있습니다.");
+    }
+    if (!allowedFactions.has(sourceFaction) || !allowedFactions.has(targetFaction) || sourceFaction === targetFaction || !delta) {
+      throw new HttpsError("invalid-argument", "양도할 진영, 대상 진영, 비율을 확인해 주세요.");
+    }
+    nextConfig.manualShareAdjustments[sourceFaction] = roundTerritoryValue(Number(nextConfig.manualShareAdjustments[sourceFaction] || 0) - delta);
+    nextConfig.manualShareAdjustments[targetFaction] = roundTerritoryValue(Number(nextConfig.manualShareAdjustments[targetFaction] || 0) + delta);
+    logPayload.targetCharacterName = `${sourceFaction} -> ${targetFaction}`;
+    logPayload.note = `${sourceFaction} -> ${targetFaction} ${delta.toFixed(2)}%${note ? ` / ${note}` : ""}`;
+  } else if (action === "update-rules") {
+    nextConfig.settings = normalizeRankingTerritorySettings({
+      ...nextConfig.settings,
+      ...payload,
+      regularPayouts: payload.regularPayouts || nextConfig.settings.regularPayouts,
+      warPayouts: payload.warPayouts || nextConfig.settings.warPayouts,
+    });
+    logPayload.targetCharacterName = "정산 규칙";
+    logPayload.note = "정규전/쟁탈전 정산 규칙 수정";
+  } else if (action === "reset-territory-progress") {
+    nextConfig.regularPointAdjustments = [];
+    nextConfig.regularPermanentClaimTotals = buildZeroFactionTotals();
+    nextConfig.manualShareAdjustments = buildZeroFactionTotals();
+    nextConfig.territoryCellAssignments = {};
+    logPayload.targetCharacterName = "지도 초기화";
+    logPayload.note = "영토/점수 진행 상태 초기화 및 정규전 복귀";
+  } else {
+    throw new HttpsError("invalid-argument", "지원하지 않는 작업입니다.");
+  }
 
-  const rankings = preferredUsers
-    .map(({ item, data }) => {
-      const selectedTraitIds = Array.isArray(data.selectedTraitIds) ? data.selectedTraitIds : [];
-      const usedTraitPoints = selectedTraitIds.reduce(
-        (sum, traitId) => sum + Number(traitPointMap.get(traitId) || 0),
-        0
-      );
+  await configRef.set(serializeRankingTerritoryConfig(nextConfig), { merge: true });
+  await db.collection("operate-logs").add(logPayload);
 
-      return {
-        characterName: data.characterName || item.id,
-        nickname: data.nickname || "-",
-        profileTitle: String(data.profileTitle || "").trim(),
-        characterNameColorPreset: String(data.characterNameColorPreset || "").trim(),
-        rankingPoints: Number(data.rankingPoints || 0),
-        currency: Number(data.currency || 0),
-        factionName: String(data.factionName || "").trim(),
-        factionDisguiseName: String(data.factionDisguiseName || "").trim(),
-        factionDisguiseUntil: String(data.factionDisguiseUntil || "").trim(),
-        totalTraitPoints: Number(data.availableTraitPoints || 0) + usedTraitPoints,
-      };
-    })
-    .sort((left, right) => right.rankingPoints - left.rankingPoints);
-
-  return { rankings };
+  return {
+    ok: true,
+    config: normalizeRankingTerritoryConfig(nextConfig),
+  };
 });
 
 exports.selectTrait = onCall(async (request) => {
@@ -846,6 +1137,7 @@ exports.ensureMahjongProfileItems = onCall(async (request) => {
 
   const itemDefinitions = buildMahjongProfileItemDefinitions();
   let createdCount = 0;
+  let updatedCount = 0;
 
   for (let index = 0; index < itemDefinitions.length; index += 1) {
     const definition = itemDefinitions[index];
@@ -853,6 +1145,22 @@ exports.ensureMahjongProfileItems = onCall(async (request) => {
     const itemRef = db.collection("item-db").doc(itemId);
     const existingSnapshot = await itemRef.get();
     if (existingSnapshot.exists) {
+      const existingData = existingSnapshot.data() || {};
+      const patch = {};
+      if (String(existingData.shortLabel || "").trim() !== definition.shortLabel) {
+        patch.shortLabel = definition.shortLabel;
+      }
+      if (String(existingData.spriteKey || "").trim() !== definition.spriteKey) {
+        patch.spriteKey = definition.spriteKey;
+      }
+      if (String(existingData.category || "").trim() !== "프로필 꾸미기") {
+        patch.category = "프로필 꾸미기";
+      }
+      if (Object.keys(patch).length) {
+        patch.updatedAt = FieldValue.serverTimestamp();
+        await itemRef.set(patch, { merge: true });
+        updatedCount += 1;
+      }
       continue;
     }
 
@@ -882,6 +1190,7 @@ exports.ensureMahjongProfileItems = onCall(async (request) => {
   return {
     ok: true,
     createdCount,
+    updatedCount,
     totalCount: itemDefinitions.length,
   };
 });
@@ -3390,6 +3699,11 @@ const MAHJONG_PROFILE_TILE_LABELS = [
   "1통", "2통", "3통", "4통", "5통", "6통", "7통", "8통", "9통",
   "1삭", "2삭", "3삭", "4삭", "5삭", "6삭", "7삭", "8삭", "9삭",
   "아카5만", "아카5삭", "아카5통",
+  "흑동", "흑남", "흑서", "흑북", "흑백", "흑발", "흑중",
+  "흑1만", "흑2만", "흑3만", "흑4만", "흑5만", "흑6만", "흑7만", "흑8만", "흑9만",
+  "흑1통", "흑2통", "흑3통", "흑4통", "흑5통", "흑6통", "흑7통", "흑8통", "흑9통",
+  "흑1삭", "흑2삭", "흑3삭", "흑4삭", "흑5삭", "흑6삭", "흑7삭", "흑8삭", "흑9삭",
+  "흑아카5만", "흑아카5삭", "흑아카5통",
 ];
 
 function buildMahjongProfileItemDefinitions() {
@@ -3471,6 +3785,1528 @@ function getCharacterNameColorLabel(presetId) {
     return `염색 ${normalized.slice(-3)}`;
   }
   return "랜덤";
+}
+
+function buildPreferredUsers(userSnapshot, traitPointMap) {
+  return Array.from(
+    userSnapshot.docs.reduce((map, item) => {
+      const data = item.data();
+      const key = String(data.uid || item.id || "").trim();
+      const current = map.get(key);
+      const score = item.id === data.characterName ? 2 : item.id !== data.uid ? 1 : 0;
+      if (!current || score > current.score) {
+        map.set(key, { score, item, data });
+      }
+      return map;
+    }, new Map()).values()
+  ).map(({ item, data }) => {
+    const selectedTraitIds = Array.isArray(data.selectedTraitIds) ? data.selectedTraitIds : [];
+    const usedTraitPoints = selectedTraitIds.reduce(
+      (sum, traitId) => sum + Number(traitPointMap.get(traitId) || 0),
+      0
+    );
+    const nickname = String(data.nickname || "-").trim();
+    const extraNicknames = Array.isArray(data.extraNicknames)
+      ? data.extraNicknames.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    return {
+      uid: String(data.uid || "").trim(),
+      characterName: String(data.characterName || item.id || "").trim(),
+      nickname,
+      extraNicknames,
+      profileTitle: String(data.profileTitle || "").trim(),
+      characterNameColorPreset: String(data.characterNameColorPreset || "").trim(),
+      rankingPoints: Number(data.rankingPoints || 0),
+      currency: Number(data.currency || 0),
+      factionName: String(data.factionName || "").trim(),
+      factionDisguiseName: String(data.factionDisguiseName || "").trim(),
+      factionDisguiseUntil: String(data.factionDisguiseUntil || "").trim(),
+      totalTraitPoints: Number(data.availableTraitPoints || 0) + usedTraitPoints,
+    };
+  });
+}
+
+function getRankingTerritoryConfigRef() {
+  return db.collection(rankingTerritoryConfigDocPath[0]).doc(rankingTerritoryConfigDocPath[1]);
+}
+
+function getDefaultRankingTerritoryConfig() {
+  return {
+    settings: {
+      regularPayouts: {
+        "ranked-4p-hanchan": [30, 10, -10, -30],
+        "ranked-3p-hanchan": [15, 0, -15],
+      },
+      warPayouts: {
+        "ranked-4p-hanchan": { entryPercent: 0.2, prizePercents: [0.45, 0.25, 0.1, 0] },
+        "ranked-3p-hanchan": { entryPercent: 0.1, prizePercents: [0.2, 0.1, 0] },
+      },
+      regularCaptureThreshold: 100,
+      weekdayCaptureMultiplier: 1,
+      weekendCaptureMultiplier: 2,
+    },
+    regularPointAdjustments: [],
+    regularPermanentClaimTotals: buildZeroFactionTotals(),
+    manualShareAdjustments: buildZeroFactionTotals(),
+    territoryCellAssignments: {},
+  };
+}
+
+function normalizeRankingTerritoryConfig(rawConfig) {
+  const defaults = getDefaultRankingTerritoryConfig();
+  const settings = normalizeRankingTerritorySettings(rawConfig?.settings || defaults.settings);
+  const regularPointAdjustments = Array.isArray(rawConfig?.regularPointAdjustments)
+    ? rawConfig.regularPointAdjustments
+        .map((item) => ({
+          id: String(item?.id || randomUUID()).trim(),
+          periodKey: String(item?.periodKey || "").trim(),
+          factionName: String(item?.factionName || "").trim(),
+          delta: Math.trunc(Number(item?.delta || 0)),
+          note: String(item?.note || "").trim(),
+          createdAtMs: Number(item?.createdAtMs || 0),
+        }))
+        .filter((item) => item.periodKey && allowedFactions.has(item.factionName) && item.delta)
+    : [];
+  const regularPermanentClaimTotals = factionOrder.reduce((result, faction) => {
+    result[faction] = Math.max(0, Math.floor(Number(rawConfig?.regularPermanentClaimTotals?.[faction] || 0)));
+    return result;
+  }, {});
+  const manualShareAdjustments = factionOrder.reduce((result, faction) => {
+    result[faction] = roundTerritoryValue(Number(rawConfig?.manualShareAdjustments?.[faction] || 0));
+    return result;
+  }, {});
+  const territoryCellAssignments = Object.entries(rawConfig?.territoryCellAssignments || {}).reduce((result, [key, value]) => {
+    const cellId = String(key || "").trim();
+    const factionName = String(value || "").trim();
+    if (/^cell-\d+$/.test(cellId) && allowedFactions.has(factionName)) {
+      result[cellId] = factionName;
+    }
+    return result;
+  }, {});
+
+  return {
+    settings,
+    regularPointAdjustments,
+    regularPermanentClaimTotals,
+    manualShareAdjustments,
+    territoryCellAssignments,
+  };
+}
+
+function serializeRankingTerritoryConfig(config) {
+  return normalizeRankingTerritoryConfig(config);
+}
+
+async function persistRegularPermanentClaimTotals(configRef, adminConfig, computedTotals) {
+  const normalizedComputedTotals = factionOrder.reduce((result, faction) => {
+    result[faction] = Math.max(0, Math.floor(Number(computedTotals?.[faction] || 0)));
+    return result;
+  }, {});
+  const hasIncrease = factionOrder.some(
+    (faction) => normalizedComputedTotals[faction] > Number(adminConfig?.regularPermanentClaimTotals?.[faction] || 0)
+  );
+  if (!hasIncrease) {
+    return;
+  }
+
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(configRef);
+    const currentConfig = normalizeRankingTerritoryConfig(snapshot.data());
+    const nextTotals = factionOrder.reduce((result, faction) => {
+      result[faction] = Math.max(
+        Number(currentConfig.regularPermanentClaimTotals?.[faction] || 0),
+        Number(normalizedComputedTotals[faction] || 0)
+      );
+      return result;
+    }, {});
+    const shouldUpdate = factionOrder.some(
+      (faction) => nextTotals[faction] > Number(currentConfig.regularPermanentClaimTotals?.[faction] || 0)
+    );
+    if (shouldUpdate) {
+      transaction.set(configRef, { regularPermanentClaimTotals: nextTotals }, { merge: true });
+    }
+  });
+}
+
+function normalizeRankingTerritorySettings(rawSettings) {
+  const defaults = getDefaultRankingTerritoryConfig().settings;
+  return {
+    regularPayouts: {
+      "ranked-4p-hanchan": normalizeNumericArray(rawSettings?.regularPayouts?.["ranked-4p-hanchan"], defaults.regularPayouts["ranked-4p-hanchan"]),
+      "ranked-3p-hanchan": normalizeNumericArray(rawSettings?.regularPayouts?.["ranked-3p-hanchan"], defaults.regularPayouts["ranked-3p-hanchan"]),
+    },
+    warPayouts: {
+      "ranked-4p-hanchan": {
+        entryPercent: roundTerritoryValue(rawSettings?.warPayouts?.["ranked-4p-hanchan"]?.entryPercent ?? defaults.warPayouts["ranked-4p-hanchan"].entryPercent),
+        prizePercents: normalizeNumericArray(rawSettings?.warPayouts?.["ranked-4p-hanchan"]?.prizePercents, defaults.warPayouts["ranked-4p-hanchan"].prizePercents),
+      },
+      "ranked-3p-hanchan": {
+        entryPercent: roundTerritoryValue(rawSettings?.warPayouts?.["ranked-3p-hanchan"]?.entryPercent ?? defaults.warPayouts["ranked-3p-hanchan"].entryPercent),
+        prizePercents: normalizeNumericArray(rawSettings?.warPayouts?.["ranked-3p-hanchan"]?.prizePercents, defaults.warPayouts["ranked-3p-hanchan"].prizePercents),
+      },
+    },
+    regularCaptureThreshold: Math.max(1, Math.trunc(Number(rawSettings?.regularCaptureThreshold ?? defaults.regularCaptureThreshold))),
+    weekdayCaptureMultiplier: Math.max(1, Math.trunc(Number(rawSettings?.weekdayCaptureMultiplier ?? defaults.weekdayCaptureMultiplier))),
+    weekendCaptureMultiplier: Math.max(1, Math.trunc(Number(rawSettings?.weekendCaptureMultiplier ?? defaults.weekendCaptureMultiplier))),
+  };
+}
+
+function normalizeNumericArray(candidate, defaults) {
+  const source = Array.isArray(candidate) ? candidate : defaults;
+  return defaults.map((defaultValue, index) => roundTerritoryValue(Number(source[index] ?? defaultValue)));
+}
+
+function buildResolvedRankingModeDefinitions(settings) {
+  return {
+    "ranked-4p-hanchan": {
+      ...rankingModeDefinitions["ranked-4p-hanchan"],
+      pointsByPlace: normalizeNumericArray(settings?.regularPayouts?.["ranked-4p-hanchan"], rankingModeDefinitions["ranked-4p-hanchan"].pointsByPlace),
+    },
+    "ranked-3p-hanchan": {
+      ...rankingModeDefinitions["ranked-3p-hanchan"],
+      pointsByPlace: normalizeNumericArray(settings?.regularPayouts?.["ranked-3p-hanchan"], rankingModeDefinitions["ranked-3p-hanchan"].pointsByPlace),
+    },
+  };
+}
+
+function buildRegularCaptureSettings(settings) {
+  return {
+    captureThreshold: Math.max(1, Math.trunc(Number(settings?.regularCaptureThreshold || 100))),
+    weekdayMultiplier: Math.max(1, Math.trunc(Number(settings?.weekdayCaptureMultiplier || 1))),
+    weekendMultiplier: Math.max(1, Math.trunc(Number(settings?.weekendCaptureMultiplier || 2))),
+  };
+}
+
+function resolveRequestedRankingPeriod(selectedPeriodKeyInput, periods) {
+  const safeInput = String(selectedPeriodKeyInput || "").trim();
+  if (safeInput && periods.some((period) => period.key === safeInput)) {
+    return safeInput;
+  }
+  if (periods.length) {
+    return periods[periods.length - 1].key;
+  }
+  return getSeoulDateKey(new Date());
+}
+
+function buildRankingPayload({ users, matchDocs, selectedDateInput, adminConfig = null }) {
+  const normalizedAdminConfig = normalizeRankingTerritoryConfig(adminConfig);
+  const modeDefinitions = buildResolvedRankingModeDefinitions(normalizedAdminConfig.settings);
+  const regularCaptureSettings = buildRegularCaptureSettings(normalizedAdminConfig.settings);
+  const userLookup = new Map();
+  const nicknameLookup = new Map();
+
+  users.forEach((user) => {
+    if (user.characterName) {
+      userLookup.set(user.characterName, user);
+    }
+    const nicknameCandidates = [user.nickname, ...(Array.isArray(user.extraNicknames) ? user.extraNicknames : [])];
+    nicknameCandidates
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .forEach((nickname) => {
+        nicknameLookup.set(normalizeRankingNickname(nickname), user);
+      });
+  });
+
+  const todayDateKey = getSeoulDateKey(new Date());
+  const requestedDateKey = String(selectedDateInput || "").trim();
+  const isPastDate = requestedDateKey && requestedDateKey < todayDateKey;
+  const filteredMatchDocs = isPastDate
+    ? matchDocs.filter((doc) => {
+        const data = doc.data();
+        const dateKey = extractRankingDateKey(data) || getSeoulDateKey(resolveRankingMatchTimestamp(data));
+        return dateKey <= requestedDateKey;
+      })
+    : matchDocs;
+  const filteredAdminConfig = isPastDate
+    ? {
+        ...normalizedAdminConfig,
+        regularPointAdjustments: (normalizedAdminConfig.regularPointAdjustments || []).filter(
+          (item) => String(item.periodKey || "") <= requestedDateKey
+        ),
+      }
+    : normalizedAdminConfig;
+
+  const timeline = buildRankingTimeline({
+    users,
+    matchDocs: filteredMatchDocs,
+    userLookup,
+    nicknameLookup,
+    modeDefinitions,
+    regularCaptureSettings,
+    adminConfig: isPastDate ? filteredAdminConfig : normalizedAdminConfig,
+  });
+  const selectedDate = resolveRequestedRankingPeriod(selectedDateInput, timeline.periods);
+  const selectedPeriod =
+    timeline.periods.find((period) => period.key === selectedDate) ||
+    buildEmptyRankingPeriod({ users, dateKey: selectedDate, modeDefinitions });
+
+  const modes = finalizePeriodModes(selectedPeriod.modeScoreMaps, modeDefinitions);
+  const combinedRankings = finalizeCombinedRankings(users, modes);
+  const factionScores = buildFactionScoreSummary({
+    rankings: combinedRankings,
+    phase: selectedPeriod.phase,
+    scoreUnit: selectedPeriod.scoreUnit,
+    territoryShares: timeline.territory.shareTotals,
+    rawTotalsOverride: selectedPeriod.factionTotals,
+  });
+  const currentPhase = String(timeline.territory.phase || "regular").trim();
+  const currentFactionScores = buildFactionScoreSummary({
+    rankings: [],
+    phase: currentPhase,
+    scoreUnit: currentPhase === "war" ? "percent" : "points",
+    territoryShares: timeline.territory.shareTotals,
+    rawTotalsOverride: currentPhase === "war"
+      ? timeline.territory.shareTotals
+      : timeline.territory.remainingTotals,
+  });
+  const currentRegularPeriodKey = [...timeline.periods]
+    .reverse()
+    .find((period) => period.phase === "regular")?.key || "";
+
+  return {
+    selectedDate,
+    selectedDateLabel: selectedPeriod.label,
+    availableDates: timeline.periods.length ? timeline.periods.map((period) => period.key).reverse() : [selectedDate],
+    dateLabels: timeline.periods.reduce((result, period) => {
+      result[period.key] = period.label;
+      return result;
+    }, {}),
+    phase: selectedPeriod.phase,
+    currentPhase,
+    currentRegularPeriodKey,
+    scoreUnit: selectedPeriod.scoreUnit,
+    modes,
+    combinedRankings,
+    factionScores,
+    currentFactionScores,
+    territory: timeline.territory,
+    regularComputedClaimTotals: timeline.regularComputedClaimTotals,
+  };
+}
+
+function buildRankingAccumulator(user) {
+  return {
+    uid: String(user.uid || "").trim(),
+    characterName: String(user.characterName || "").trim(),
+    nickname: String(user.nickname || "-").trim() || "-",
+    profileTitle: String(user.profileTitle || "").trim(),
+    characterNameColorPreset: String(user.characterNameColorPreset || "").trim(),
+    rankingPoints: Number(user.rankingPointsForDay || 0),
+    currency: Number(user.currency || 0),
+    factionName: String(user.factionName || "").trim(),
+    factionDisguiseName: String(user.factionDisguiseName || "").trim(),
+    factionDisguiseUntil: String(user.factionDisguiseUntil || "").trim(),
+    totalTraitPoints: Number(user.totalTraitPoints || 0),
+    matchCount: Number(user.matchCount || 0),
+  };
+}
+
+function finalizeRankingEntries(entries) {
+  const sorted = entries
+    .map((item) => ({
+      ...item,
+      rankingPoints: Number(item.rankingPoints || 0),
+      matchCount: Number(item.matchCount || 0),
+    }))
+    .sort((left, right) => {
+      const pointDiff = Number(right.rankingPoints || 0) - Number(left.rankingPoints || 0);
+      if (pointDiff !== 0) {
+        return pointDiff;
+      }
+      return String(left.characterName || "").localeCompare(String(right.characterName || ""), "ko");
+    });
+
+  let lastDisplayRank = 0;
+  return sorted.map((item, index) => {
+    const previousPoints = index > 0 ? Number(sorted[index - 1].rankingPoints || 0) : null;
+    const currentPoints = Number(item.rankingPoints || 0);
+    const displayRank = index > 0 && previousPoints === currentPoints ? lastDisplayRank : index + 1;
+    lastDisplayRank = displayRank;
+    return {
+      ...item,
+      displayRank,
+    };
+  });
+}
+
+function buildFactionScoreSummary({
+  rankings,
+  phase = "regular",
+  scoreUnit = "points",
+  territoryShares = null,
+  rawTotalsOverride = null,
+} = {}) {
+  const rawTotals = factionOrder.reduce((result, faction) => {
+    result[faction] = 0;
+    return result;
+  }, {});
+
+  if (rawTotalsOverride && typeof rawTotalsOverride === "object") {
+    factionOrder.forEach((faction) => {
+      rawTotals[faction] = roundTerritoryValue(rawTotalsOverride[faction]);
+    });
+  } else {
+    (Array.isArray(rankings) ? rankings : []).forEach((item) => {
+      const factionName = String(item.factionName || "").trim();
+      if (!Object.prototype.hasOwnProperty.call(rawTotals, factionName)) {
+        return;
+      }
+      rawTotals[factionName] += Number(item.rankingPoints || 0);
+    });
+  }
+
+  const barTotals = phase === "war" && territoryShares
+    ? factionOrder.reduce((result, faction) => {
+        result[faction] = roundTerritoryValue(territoryShares[faction]);
+        return result;
+      }, {})
+    : { ...rawTotals };
+
+  return {
+    rawTotals,
+    barTotals,
+    displayUnit: scoreUnit,
+    barUnit: phase === "war" ? "percent" : scoreUnit,
+    totalPositive: Object.values(barTotals).reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0),
+  };
+}
+
+function buildRankingTimeline({ users, matchDocs, userLookup, nicknameLookup, modeDefinitions, regularCaptureSettings, adminConfig }) {
+  const events = matchDocs
+    .map((doc) => normalizeRankingMatchEvent(doc, userLookup, nicknameLookup, modeDefinitions))
+    .filter(Boolean)
+    .sort((left, right) => {
+      const timeDiff = left.timestampMs - right.timestampMs;
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+      return String(left.id || "").localeCompare(String(right.id || ""), "ko");
+    });
+
+  const periods = [];
+  const dateSequenceMap = new Map();
+  const territoryState = {
+    phase: "regular",
+    shareTotals: buildZeroFactionTotals(),
+    regularDayPoints: buildZeroFactionTotals(),
+    regularDayPointsPeak: buildZeroFactionTotals(),
+    regularClaimCounts: buildZeroFactionTotals(),
+    regularConsumedThresholdCounts: buildZeroFactionTotals(),
+    regularClaimHold: null,
+    currentRegularDateKey: "",
+    currentRegularMultiplier: regularCaptureSettings.weekdayMultiplier,
+    warCellOwners: null,
+  };
+
+  let currentPeriod = null;
+
+  const startPeriod = ({ dateKey, phase }) => {
+    const sequence = (dateSequenceMap.get(dateKey) || 0) + 1;
+    dateSequenceMap.set(dateKey, sequence);
+    const period = buildEmptyRankingPeriod({
+      users,
+      dateKey,
+      phase,
+      modeDefinitions,
+      sequence,
+    });
+    periods.push(period);
+    currentPeriod = period;
+    return period;
+  };
+
+  events.forEach((event) => {
+    const nextPhase = territoryState.phase === "war" ? "war" : "regular";
+    if (!currentPeriod || currentPeriod.dateKey !== event.dateKey || currentPeriod.phase !== nextPhase) {
+      currentPeriod = startPeriod({ dateKey: event.dateKey, phase: nextPhase });
+    }
+
+    if (nextPhase === "regular") {
+      applyRegularMatchToPeriod({
+        period: currentPeriod,
+        event,
+        territoryState,
+        modeDefinitions,
+        regularCaptureSettings,
+      });
+      if (territoryState.phase === "war") {
+        currentPeriod.endedByWarTransition = true;
+      }
+      return;
+    }
+
+    applyWarMatchToPeriod({
+      period: currentPeriod,
+      event,
+      territoryState,
+      adminConfig,
+    });
+  });
+
+  const todayDateKey = getSeoulDateKey(new Date());
+  if (territoryState.phase === "regular" && (!currentPeriod || currentPeriod.phase !== "regular" || currentPeriod.dateKey !== todayDateKey)) {
+    territoryState.currentRegularDateKey = todayDateKey;
+    territoryState.currentRegularMultiplier = isWeekendDateKey(todayDateKey)
+      ? regularCaptureSettings.weekendMultiplier
+      : regularCaptureSettings.weekdayMultiplier;
+    territoryState.regularDayPoints = buildZeroFactionTotals();
+    territoryState.regularDayPointsPeak = buildZeroFactionTotals();
+    territoryState.regularClaimCounts = buildZeroFactionTotals();
+    territoryState.regularConsumedThresholdCounts = buildZeroFactionTotals();
+    territoryState.regularClaimHold = null;
+    currentPeriod = startPeriod({ dateKey: todayDateKey, phase: "regular" });
+  }
+
+  applyAdminRegularPointAdjustments({
+    periods,
+    events,
+    modeDefinitions,
+    territoryState,
+    regularCaptureSettings,
+    adjustments: adminConfig.regularPointAdjustments,
+  });
+  if (territoryState.phase === "regular") {
+    factionOrder.forEach((faction) => {
+      territoryState.shareTotals[faction] = roundTerritoryValue(
+        Math.max(
+          Number(territoryState.shareTotals[faction] || 0),
+          Number(territoryState.regularClaimCounts[faction] || 0),
+          Number(adminConfig.regularPermanentClaimTotals?.[faction] || 0)
+        )
+      );
+    });
+  }
+  console.log("[DEBUG] shareTotals after floor:", JSON.stringify(territoryState.shareTotals), "permanentClaimTotals:", JSON.stringify(adminConfig.regularPermanentClaimTotals), "regularClaimCounts:", JSON.stringify(territoryState.regularClaimCounts));
+  const regularComputedClaimTotals = factionOrder.reduce((result, faction) => {
+    result[faction] = Math.max(0, Math.floor(Number(territoryState.shareTotals[faction] || 0)));
+    return result;
+  }, {});
+  factionOrder.forEach((faction) => {
+    territoryState.shareTotals[faction] = roundTerritoryValue(
+      Number(territoryState.shareTotals[faction] || 0) + Number(adminConfig.manualShareAdjustments[faction] || 0)
+    );
+  });
+  const occupiedCells = getOccupiedTerritoryCellCount(territoryState.shareTotals);
+  if (occupiedCells >= territoryCellCount) {
+    territoryState.phase = "war";
+    if (currentPeriod?.phase === "regular") {
+      currentPeriod.endedByWarTransition = true;
+    }
+  }
+  if (territoryState.phase === "war" && !Array.isArray(territoryState.warCellOwners)) {
+    territoryState.warCellOwners = initializeWarTerritoryOwners({
+      shareTotals: territoryState.shareTotals,
+      cellAssignments: adminConfig.territoryCellAssignments,
+    });
+  }
+  if (territoryState.phase === "war" && (!currentPeriod || currentPeriod.phase !== "war")) {
+    currentPeriod = startPeriod({
+      dateKey: currentPeriod?.dateKey || territoryState.currentRegularDateKey || todayDateKey,
+      phase: "war",
+    });
+  }
+  if (territoryState.phase === "war" && Array.isArray(territoryState.warCellOwners)) {
+    territoryState.warCellOwners = rebalanceWarTerritoryOwners({
+      currentCells: territoryState.warCellOwners,
+      shareTotals: territoryState.shareTotals,
+      seedHint: "final",
+    });
+  }
+
+  const territory = buildTerritoryState({
+    shareTotals: territoryState.shareTotals,
+    phase: territoryState.phase,
+    regularDayPoints: territoryState.regularDayPoints,
+    regularConsumedThresholdCounts: territoryState.regularConsumedThresholdCounts,
+    regularClaimHold: territoryState.regularClaimHold,
+    regularCaptureThreshold: regularCaptureSettings.captureThreshold,
+    cellAssignments: adminConfig.territoryCellAssignments,
+    warCellOwners: territoryState.warCellOwners,
+  });
+
+  return {
+    periods,
+    currentRegularDayPoints: { ...territoryState.regularDayPoints },
+    regularComputedClaimTotals,
+    territory,
+  };
+}
+
+function buildEmptyRankingPeriod({ users, dateKey, phase = "regular", sequence = 1, modeDefinitions = rankingModeDefinitions } = {}) {
+  const modeScoreMaps = new Map(
+    Object.keys(modeDefinitions).map((modeKey) => [modeKey, new Map()])
+  );
+  modeScoreMaps.forEach((scoreMap) => {
+    users.forEach((user) => {
+      if (!user.characterName) return;
+      scoreMap.set(user.characterName, buildRankingAccumulator(user));
+    });
+  });
+
+  const suffix = sequence > 1 ? `__${sequence}` : "";
+  return {
+    key: `${dateKey}${suffix}`,
+    label: dateKey,
+    dateKey,
+    sequence,
+    phase,
+    scoreUnit: phase === "war" ? "percent" : "points",
+    factionTotals: buildZeroFactionTotals(),
+    modeScoreMaps,
+    endedByWarTransition: false,
+  };
+}
+
+function finalizePeriodModes(modeScoreMaps, modeDefinitions = rankingModeDefinitions) {
+  return Object.entries(modeDefinitions).reduce((result, [modeKey, modeDefinition]) => {
+    const rankings = finalizeRankingEntries([...(modeScoreMaps.get(modeKey)?.values() || [])]);
+    result[modeKey] = {
+      key: modeKey,
+      label: modeDefinition.label,
+      rankings,
+    };
+    return result;
+  }, {});
+}
+
+function finalizeCombinedRankings(users, modes) {
+  const combinedScoreMap = new Map();
+  users.forEach((user) => {
+    if (!user.characterName) return;
+    combinedScoreMap.set(user.characterName, buildRankingAccumulator(user));
+  });
+
+  Object.values(modes).forEach((mode) => {
+    mode.rankings.forEach((item) => {
+      const current = combinedScoreMap.get(item.characterName) || buildRankingAccumulator(item);
+      current.rankingPoints += Number(item.rankingPoints || 0);
+      current.matchCount += Number(item.matchCount || 0);
+      combinedScoreMap.set(item.characterName, current);
+    });
+  });
+
+  return finalizeRankingEntries([...combinedScoreMap.values()]);
+}
+
+function normalizeRankingMatchEvent(doc, userLookup, nicknameLookup, modeDefinitions = rankingModeDefinitions) {
+  const data = doc.data();
+  const modeKey = String(data.mode || "").trim();
+  const modeDefinition = modeDefinitions[modeKey];
+  if (!modeDefinition) {
+    return null;
+  }
+
+  const timestamp = resolveRankingMatchTimestamp(data);
+  const dateKey = extractRankingDateKey(data) || getSeoulDateKey(timestamp);
+  const ranks = Array.isArray(data.ranks) ? data.ranks.slice(0, modeDefinition.playerCount) : [];
+  const participants = ranks
+    .map((rank, index) => {
+      const user = resolveRankingUserForEntry(rank, userLookup, nicknameLookup);
+      if (!user) return null;
+      const factionName = String(user.factionName || "").trim();
+      if (!allowedFactions.has(factionName)) return null;
+      return {
+        placeIndex: index,
+        user,
+        factionName,
+      };
+    })
+    .filter(Boolean);
+
+  if (!participants.length) {
+    return null;
+  }
+
+  return {
+    id: doc.id,
+    modeKey,
+    dateKey,
+    timestampMs: timestamp.getTime(),
+    participants,
+  };
+}
+
+function resolveRankingMatchTimestamp(matchData) {
+  const createdAtDate = matchData?.createdAt?.toDate?.();
+  if (createdAtDate instanceof Date && !Number.isNaN(createdAtDate.getTime())) {
+    return createdAtDate;
+  }
+  const createdAtMs = Number(matchData?.createdAtMs || 0);
+  if (createdAtMs > 0) {
+    return new Date(createdAtMs);
+  }
+  const parsedText = Date.parse(String(matchData?.createdAtText || "").trim());
+  if (Number.isFinite(parsedText)) {
+    return new Date(parsedText);
+  }
+  return new Date(0);
+}
+
+function applyRegularMatchToPeriod({ period, event, territoryState, modeDefinitions, regularCaptureSettings }) {
+  const modeDefinition = modeDefinitions[event.modeKey];
+  if (!modeDefinition) return;
+
+  if (territoryState.currentRegularDateKey !== event.dateKey) {
+    territoryState.currentRegularDateKey = event.dateKey;
+    territoryState.currentRegularMultiplier = isWeekendDateKey(event.dateKey)
+      ? regularCaptureSettings.weekendMultiplier
+      : regularCaptureSettings.weekdayMultiplier;
+    territoryState.regularDayPoints = buildZeroFactionTotals();
+    territoryState.regularDayPointsPeak = buildZeroFactionTotals();
+    territoryState.regularClaimCounts = buildZeroFactionTotals();
+    territoryState.regularConsumedThresholdCounts = buildZeroFactionTotals();
+    territoryState.regularClaimHold = null;
+  }
+
+  event.participants.forEach((participant) => {
+    const points = Number(modeDefinition.pointsByPlace[participant.placeIndex] || 0);
+    addScoreToRankingPeriod({
+      period,
+      modeKey: event.modeKey,
+      user: participant.user,
+      delta: points,
+    });
+    period.factionTotals[participant.factionName] += points;
+    territoryState.regularDayPoints[participant.factionName] += points;
+    territoryState.regularDayPointsPeak[participant.factionName] = Math.max(
+      territoryState.regularDayPointsPeak[participant.factionName] || 0,
+      territoryState.regularDayPoints[participant.factionName]
+    );
+  });
+  applyPendingRegularClaims({ territoryState, regularCaptureSettings });
+}
+
+function applyWarMatchToPeriod({ period, event, territoryState, adminConfig }) {
+  const warConfig = getWarModeDefinition(event.modeKey, adminConfig);
+  if (!warConfig) return;
+
+  const participantCounts = buildZeroFactionTotals();
+  event.participants.forEach((participant) => {
+    participantCounts[participant.factionName] += 1;
+  });
+
+  const factionCharges = buildZeroFactionTotals();
+  factionOrder.forEach((faction) => {
+    factionCharges[faction] = roundTerritoryValue(Number(participantCounts[faction] || 0) * warConfig.entryPercent);
+  });
+
+  const factionNetChanges = buildZeroFactionTotals();
+
+  factionOrder.forEach((faction) => {
+    factionNetChanges[faction] -= Number(factionCharges[faction] || 0);
+  });
+
+  event.participants.forEach((participant) => {
+    const prize = Number(warConfig.prizePercents[participant.placeIndex] || 0);
+    addScoreToRankingPeriod({
+      period,
+      modeKey: event.modeKey,
+      user: participant.user,
+      delta: prize,
+    });
+    factionNetChanges[participant.factionName] += prize;
+    period.factionTotals[participant.factionName] += prize;
+  });
+
+  factionOrder.forEach((faction) => {
+    territoryState.shareTotals[faction] = roundTerritoryValue(Number(territoryState.shareTotals[faction] || 0) + Number(factionNetChanges[faction] || 0));
+  });
+
+  stabilizeTerritoryShares(territoryState.shareTotals);
+  if (!Array.isArray(territoryState.warCellOwners)) {
+    territoryState.warCellOwners = initializeWarTerritoryOwners({
+      shareTotals: territoryState.shareTotals,
+      cellAssignments: adminConfig?.territoryCellAssignments,
+    });
+  }
+  territoryState.warCellOwners = rebalanceWarTerritoryOwners({
+    currentCells: territoryState.warCellOwners,
+    shareTotals: territoryState.shareTotals,
+    seedHint: `${event.id || ""}:${event.timestampMs || 0}`,
+  });
+}
+
+function addScoreToRankingPeriod({ period, modeKey, user, delta }) {
+  const scoreMap = period.modeScoreMaps.get(modeKey);
+  if (!scoreMap || !user?.characterName) return;
+  const current = scoreMap.get(user.characterName) || buildRankingAccumulator(user);
+  current.rankingPoints += Number(delta || 0);
+  current.matchCount += 1;
+  scoreMap.set(user.characterName, current);
+}
+
+function applyAdminRegularPointAdjustments({ periods, events, modeDefinitions, territoryState, regularCaptureSettings, adjustments }) {
+  const regularPeriods = periods.filter((period) => period.phase === "regular");
+  if (!regularPeriods.length) {
+    return;
+  }
+  const regularPeriodMap = new Map(regularPeriods.map((period) => [period.key, period]));
+  const latestRegularPeriod = regularPeriods[regularPeriods.length - 1];
+
+  const applicableAdjustments = (Array.isArray(adjustments) ? adjustments : [])
+    .filter((item) => regularPeriodMap.has(item.periodKey))
+    .sort((left, right) => {
+      const timeDiff = Number(left.createdAtMs || 0) - Number(right.createdAtMs || 0);
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+      return String(left.id || "").localeCompare(String(right.id || ""), "ko");
+    });
+
+  applicableAdjustments.forEach((item) => {
+    const targetPeriod = regularPeriodMap.get(item.periodKey);
+    if (!targetPeriod) {
+      return;
+    }
+    targetPeriod.factionTotals[item.factionName] += Number(item.delta || 0);
+  });
+
+  territoryState.regularDayPoints = factionOrder.reduce((result, faction) => {
+    result[faction] = Number(latestRegularPeriod.factionTotals?.[faction] || 0);
+    return result;
+  }, {});
+
+  if (territoryState.phase === "regular") {
+    const replayedState = replayRegularTerritoryClaims({
+      periods: regularPeriods,
+      events,
+      adjustments: applicableAdjustments,
+      modeDefinitions,
+      regularCaptureSettings,
+    });
+    console.log("[DEBUG] replay.shareTotals:", JSON.stringify(replayedState.shareTotals), "incremental.shareTotals:", JSON.stringify(territoryState.shareTotals));
+    factionOrder.forEach((faction) => {
+      territoryState.shareTotals[faction] = roundTerritoryValue(
+        Math.max(Number(replayedState.shareTotals[faction] || 0), Number(territoryState.shareTotals[faction] || 0))
+      );
+    });
+    territoryState.regularClaimCounts = { ...replayedState.latestRegularClaimCounts };
+    territoryState.regularConsumedThresholdCounts = { ...replayedState.latestRegularConsumedThresholdCounts };
+    territoryState.regularClaimHold = replayedState.latestRegularClaimHold;
+    if (replayedState.latestRegularDateKey) {
+      territoryState.currentRegularDateKey = replayedState.latestRegularDateKey;
+    }
+    if (replayedState.latestRegularMultiplier > 0) {
+      territoryState.currentRegularMultiplier = replayedState.latestRegularMultiplier;
+    }
+    if (replayedState.phase === "war") {
+      territoryState.phase = "war";
+      if (!Array.isArray(territoryState.warCellOwners)) {
+        territoryState.warCellOwners = initializeWarTerritoryOwners({
+          shareTotals: territoryState.shareTotals,
+        });
+      }
+    }
+  } else {
+    applicableAdjustments
+      .filter((item) => item.periodKey === latestRegularPeriod.key)
+      .forEach(() => {
+        applyPendingRegularClaims({ territoryState, regularCaptureSettings });
+      });
+  }
+}
+
+function applyPendingRegularClaims({ territoryState, regularCaptureSettings }) {
+  territoryState.regularClaimHold = null;
+  while (territoryState.phase !== "war") {
+    const availableCells = Math.max(0, territoryCellCount - getOccupiedTerritoryCellCount(territoryState.shareTotals));
+    if (availableCells <= 0) {
+      territoryState.phase = "war";
+      territoryState.regularClaimHold = null;
+      if (!Array.isArray(territoryState.warCellOwners)) {
+        territoryState.warCellOwners = initializeWarTerritoryOwners({
+          shareTotals: territoryState.shareTotals,
+        });
+      }
+      return;
+    }
+
+    const eligibleFactions = factionOrder
+      .map((faction) => {
+        const currentDayPoints = Number(territoryState.regularDayPoints[faction] || 0);
+        const peakPoints = Number(territoryState.regularDayPointsPeak?.[faction] || 0);
+        const earnedThresholds = Math.floor(peakPoints / regularCaptureSettings.captureThreshold);
+        const consumedThresholds = Number(territoryState.regularConsumedThresholdCounts[faction] || 0);
+        return {
+          faction,
+          currentDayPoints,
+          pendingThresholds: Math.max(0, earnedThresholds - consumedThresholds),
+        };
+      })
+      .filter((item) => item.pendingThresholds > 0);
+
+    if (!eligibleFactions.length) {
+      break;
+    }
+
+    eligibleFactions.sort((left, right) => Number(right.currentDayPoints || 0) - Number(left.currentDayPoints || 0));
+    const highestPoints = Number(eligibleFactions[0]?.currentDayPoints || 0);
+    const topFactions = eligibleFactions.filter((item) => Number(item.currentDayPoints || 0) === highestPoints);
+    if (availableCells === 1 && topFactions.length !== 1) {
+      territoryState.regularClaimHold = {
+        factions: topFactions.map((item) => item.faction),
+        points: highestPoints,
+        availableCells,
+      };
+      break;
+    }
+    const winnerFaction = topFactions
+      .sort((left, right) => {
+        const claimedDiff = Number(territoryState.regularClaimCounts[left.faction] || 0) - Number(territoryState.regularClaimCounts[right.faction] || 0);
+        if (claimedDiff !== 0) {
+          return claimedDiff;
+        }
+        return factionOrder.indexOf(left.faction) - factionOrder.indexOf(right.faction);
+      })[0].faction;
+    const grantedClaims = Math.min(availableCells, Math.max(1, Number(territoryState.currentRegularMultiplier || 1)));
+    territoryState.regularClaimCounts[winnerFaction] = Number(territoryState.regularClaimCounts[winnerFaction] || 0) + grantedClaims;
+    territoryState.regularConsumedThresholdCounts[winnerFaction] = Number(territoryState.regularConsumedThresholdCounts[winnerFaction] || 0) + 1;
+    territoryState.shareTotals[winnerFaction] = roundTerritoryValue(Number(territoryState.shareTotals[winnerFaction] || 0) + grantedClaims);
+  }
+
+  if (getOccupiedTerritoryCellCount(territoryState.shareTotals) >= territoryCellCount) {
+    territoryState.phase = "war";
+    territoryState.regularClaimHold = null;
+    if (!Array.isArray(territoryState.warCellOwners)) {
+      territoryState.warCellOwners = initializeWarTerritoryOwners({
+        shareTotals: territoryState.shareTotals,
+      });
+    }
+  }
+}
+
+function replayRegularTerritoryClaims({
+  periods,
+  events,
+  adjustments,
+  modeDefinitions,
+  regularCaptureSettings,
+}) {
+  const shareTotals = buildZeroFactionTotals();
+  let phase = "regular";
+  let latestRegularClaimCounts = buildZeroFactionTotals();
+  let latestRegularConsumedThresholdCounts = buildZeroFactionTotals();
+  let latestRegularDateKey = "";
+  let latestRegularMultiplier = regularCaptureSettings.weekdayMultiplier;
+  let latestRegularClaimHold = null;
+  const regularPeriods = Array.isArray(periods) ? periods.filter((period) => period.phase === "regular") : [];
+  const periodIndexByKey = new Map(regularPeriods.map((period, index) => [period.key, index]));
+  const periodKeyByDateKey = new Map();
+  regularPeriods.forEach((period) => {
+    if (!periodKeyByDateKey.has(period.dateKey)) {
+      periodKeyByDateKey.set(period.dateKey, period.key);
+    }
+  });
+  const entryGroups = new Map(regularPeriods.map((period) => [period.key, []]));
+
+  (Array.isArray(events) ? events : []).forEach((event) => {
+    const periodKey = periodKeyByDateKey.get(String(event?.dateKey || "").trim());
+    const modeDefinition = modeDefinitions?.[String(event?.modeKey || "").trim()];
+    if (!periodKey || !modeDefinition) {
+      return;
+    }
+    const factionDeltas = buildZeroFactionTotals();
+    (Array.isArray(event.participants) ? event.participants : []).forEach((participant) => {
+      const factionName = String(participant?.factionName || "").trim();
+      if (!allowedFactions.has(factionName)) {
+        return;
+      }
+      factionDeltas[factionName] += Number(modeDefinition.pointsByPlace?.[participant.placeIndex] || 0);
+    });
+    entryGroups.get(periodKey)?.push({
+      kind: "match",
+      id: String(event.id || "").trim(),
+      timestampMs: Number(event.timestampMs || 0),
+      factionDeltas,
+    });
+  });
+
+  (Array.isArray(adjustments) ? adjustments : []).forEach((item) => {
+    if (!periodIndexByKey.has(item.periodKey)) {
+      return;
+    }
+    const factionDeltas = buildZeroFactionTotals();
+    factionDeltas[item.factionName] = Number(item.delta || 0);
+    entryGroups.get(item.periodKey)?.push({
+      kind: "adjustment",
+      id: String(item.id || "").trim(),
+      timestampMs: Number(item.createdAtMs || 0),
+      factionDeltas,
+    });
+  });
+
+  regularPeriods.forEach((period) => {
+      if (phase === "war") {
+        return;
+      }
+
+      const multiplier = isWeekendDateKey(period.dateKey)
+        ? regularCaptureSettings.weekendMultiplier
+        : regularCaptureSettings.weekdayMultiplier;
+      const periodClaimCounts = buildZeroFactionTotals();
+      const periodConsumedThresholdCounts = buildZeroFactionTotals();
+      let periodClaimHold = null;
+      latestRegularDateKey = String(period.dateKey || "").trim();
+      latestRegularMultiplier = multiplier;
+
+      const replayTerritoryState = {
+        phase,
+        shareTotals,
+        regularDayPoints: buildZeroFactionTotals(),
+        regularDayPointsPeak: buildZeroFactionTotals(),
+        regularClaimCounts: periodClaimCounts,
+        regularConsumedThresholdCounts: periodConsumedThresholdCounts,
+        regularClaimHold: null,
+        currentRegularDateKey: latestRegularDateKey,
+        currentRegularMultiplier: multiplier,
+        warCellOwners: null,
+      };
+
+      const entries = [...(entryGroups.get(period.key) || [])].sort((left, right) => {
+        const timeDiff = Number(left.timestampMs || 0) - Number(right.timestampMs || 0);
+        if (timeDiff !== 0) return timeDiff;
+        const leftPos = factionOrder.reduce((s, f) => { const d = Number(left.factionDeltas?.[f] || 0); return s + (d > 0 ? d : 0); }, 0);
+        const rightPos = factionOrder.reduce((s, f) => { const d = Number(right.factionDeltas?.[f] || 0); return s + (d > 0 ? d : 0); }, 0);
+        if (leftPos !== rightPos) return rightPos - leftPos;
+        if (left.kind !== right.kind) return left.kind === "match" ? -1 : 1;
+        return String(left.id || "").localeCompare(String(right.id || ""), "ko");
+      });
+
+      entries.forEach((entry) => {
+        if (replayTerritoryState.phase === "war") {
+          return;
+        }
+        factionOrder.forEach((faction) => {
+          const delta = Number(entry.factionDeltas?.[faction] || 0);
+          replayTerritoryState.regularDayPoints[faction] += delta;
+          replayTerritoryState.regularDayPointsPeak[faction] = Math.max(
+            replayTerritoryState.regularDayPointsPeak[faction] || 0,
+            replayTerritoryState.regularDayPoints[faction]
+          );
+        });
+        applyPendingRegularClaims({ territoryState: replayTerritoryState, regularCaptureSettings });
+      });
+
+      phase = replayTerritoryState.phase;
+      periodClaimHold = replayTerritoryState.regularClaimHold;
+
+      latestRegularClaimCounts = { ...periodClaimCounts };
+      latestRegularConsumedThresholdCounts = { ...periodConsumedThresholdCounts };
+      latestRegularClaimHold = periodClaimHold;
+    });
+
+  return {
+    phase,
+    shareTotals,
+    latestRegularClaimCounts,
+    latestRegularConsumedThresholdCounts,
+    latestRegularDateKey,
+    latestRegularMultiplier,
+    latestRegularClaimHold,
+  };
+}
+
+function getWarModeDefinition(modeKey, adminConfig = null) {
+  const normalizedConfig = normalizeRankingTerritoryConfig(adminConfig);
+  const warPayout = normalizedConfig.settings.warPayouts?.[modeKey];
+  if (!warPayout) return null;
+  const defaultWarPayout = getDefaultRankingTerritoryConfig().settings.warPayouts?.[modeKey] || { prizePercents: [] };
+  return {
+    entryPercent: roundTerritoryValue(Number(warPayout.entryPercent || 0)),
+    prizePercents: normalizeNumericArray(warPayout.prizePercents, defaultWarPayout.prizePercents || []),
+  };
+}
+
+async function buildCurrentRankingBoardForAdmin(adminConfig) {
+  const [userSnapshot, traitSnapshot, matchSnapshot] = await Promise.all([
+    db.collection("users").get(),
+    db.collection("traits").get(),
+    db.collection("match-results").limit(10000).get(),
+  ]);
+  const traitPointMap = new Map(
+    traitSnapshot.docs.map((item) => [item.id, Number(item.data().requiredPoints || 0)])
+  );
+  const users = buildPreferredUsers(userSnapshot, traitPointMap);
+  return buildRankingPayload({
+    users,
+    matchDocs: matchSnapshot.docs,
+    selectedDateInput: "",
+    adminConfig,
+  });
+}
+
+function buildTerritoryState({
+  shareTotals,
+  phase = "regular",
+  regularDayPoints = null,
+  regularConsumedThresholdCounts = null,
+  regularClaimHold = null,
+  cellAssignments = null,
+  warCellOwners = null,
+  regularCaptureThreshold = 100,
+} = {}) {
+  const cells = generateHexTerritoryShape();
+  const normalizedShares = factionOrder.reduce((result, faction) => {
+    result[faction] = roundTerritoryValue(Number(shareTotals?.[faction] || 0));
+    return result;
+  }, {});
+  if (phase === "war") {
+    stabilizeTerritoryShares(normalizedShares);
+  }
+
+  const captureCounts = phase === "war"
+    ? buildZeroFactionTotals()
+    : allocateRegularTerritoryCells(normalizedShares);
+  const remainingTotals = factionOrder.reduce((result, faction) => {
+    const dayPoints = Number(regularDayPoints?.[faction] || 0);
+    if (phase !== "regular") {
+      result[faction] = 0;
+      return result;
+    }
+    const consumedThresholds = Number(regularConsumedThresholdCounts?.[faction] || 0);
+    result[faction] = roundTerritoryValue(dayPoints - (consumedThresholds * Math.max(1, Number(regularCaptureThreshold || 100))));
+    return result;
+  }, {});
+
+  if (phase === "war") {
+    const finalizedCells = rebalanceWarTerritoryOwners({
+      currentCells: Array.isArray(warCellOwners) && warCellOwners.length
+        ? warCellOwners
+        : initializeWarTerritoryOwners({ shareTotals: normalizedShares }),
+      shareTotals: normalizedShares,
+      seedHint: "render",
+    });
+    const ownerCounts = buildTerritoryOwnerCounts(finalizedCells);
+    const version = [
+      phase,
+      ...factionOrder.map((faction) => `${faction}:${normalizedShares[faction]}:${Number(ownerCounts.captureCounts[faction] || 0)}`),
+      `contested:${ownerCounts.contestedCount}`,
+      finalizedCells.map((cell) => String(cell.ownerFaction || "-")).join("|"),
+    ].join("::");
+    return {
+      version,
+      phase,
+      cells: finalizedCells,
+      generatedAt: new Date().toISOString(),
+      captureCounts: ownerCounts.captureCounts,
+      contestedCount: ownerCounts.contestedCount,
+      remainingTotals,
+      shareTotals: normalizedShares,
+      regularCaptureThreshold: Math.max(1, Number(regularCaptureThreshold || 100)),
+      regularClaimHold: null,
+    };
+  }
+
+  const finalizedCells = buildRegularTerritoryOwners({
+    captureCounts,
+    cellAssignments,
+  });
+  const version = [
+    phase,
+    ...factionOrder.map((faction) => `${faction}:${normalizedShares[faction]}:${Number(captureCounts[faction] || 0)}`),
+    finalizedCells.map((cell) => String(cell.ownerFaction || "-")).join("|"),
+  ].join("::");
+
+  return {
+    version,
+    phase,
+    cells: finalizedCells,
+    generatedAt: new Date().toISOString(),
+    captureCounts,
+    remainingTotals,
+    shareTotals: normalizedShares,
+    regularCaptureThreshold: Math.max(1, Number(regularCaptureThreshold || 100)),
+    regularClaimHold: regularClaimHold && Array.isArray(regularClaimHold.factions) && regularClaimHold.factions.length
+      ? {
+          factions: regularClaimHold.factions.filter((faction) => allowedFactions.has(String(faction || "").trim())),
+          points: roundTerritoryValue(Number(regularClaimHold.points || 0)),
+          availableCells: Math.max(0, Math.trunc(Number(regularClaimHold.availableCells || 0))),
+        }
+      : null,
+  };
+}
+
+function buildRegularTerritoryOwners({ captureCounts, cellAssignments = null } = {}) {
+  const cells = generateHexTerritoryShape();
+  const ownershipById = new Map();
+  const rng = createSeededRandom("territory-owner:permanent-v2");
+  const shuffledIds = [...cells.map((cell) => cell.id)];
+  shuffleArrayInPlace(shuffledIds, rng);
+  const explicitAssignments = Object.entries(cellAssignments || {}).reduce((result, [cellId, factionName]) => {
+    const normalizedCellId = String(cellId || "").trim();
+    const normalizedFactionName = String(factionName || "").trim();
+    if (!/^cell-\d+$/.test(normalizedCellId) || !allowedFactions.has(normalizedFactionName)) {
+      return result;
+    }
+    result[normalizedCellId] = normalizedFactionName;
+    return result;
+  }, {});
+  const explicitAssignmentCounts = factionOrder.reduce((result, faction) => {
+    result[faction] = 0;
+    return result;
+  }, {});
+  Object.values(explicitAssignments).forEach((factionName) => {
+    explicitAssignmentCounts[factionName] += 1;
+  });
+
+  const pendingClaims = factionOrder.map((faction) => ({
+    faction,
+    remaining: Math.max(0, Number(captureCounts?.[faction] || 0) - Number(explicitAssignmentCounts[faction] || 0)),
+  }));
+  const totalCapturedCells = factionOrder.reduce((sum, faction) => sum + Number(captureCounts?.[faction] || 0), 0);
+
+  Object.entries(explicitAssignments).forEach(([cellId, factionName]) => {
+    ownershipById.set(cellId, factionName);
+  });
+  const reservedCellIds = new Set(Object.keys(explicitAssignments));
+  const availableCellIds = shuffledIds.filter((cellId) => !reservedCellIds.has(cellId));
+
+  let nextCellIndex = 0;
+  while (nextCellIndex < availableCellIds.length && pendingClaims.some((item) => item.remaining > 0)) {
+    pendingClaims.forEach((claim) => {
+      if (claim.remaining <= 0 || nextCellIndex >= availableCellIds.length) {
+        return;
+      }
+      ownershipById.set(availableCellIds[nextCellIndex], claim.faction);
+      nextCellIndex += 1;
+      claim.remaining -= 1;
+    });
+  }
+
+  return cells.map((cell) => ({
+    ...cell,
+    ownerFaction: String(totalCapturedCells > 0 ? (ownershipById.get(cell.id) || "") : "").trim(),
+  }));
+}
+
+function initializeWarTerritoryOwners({ shareTotals, cellAssignments = null } = {}) {
+  const regularCounts = allocateRegularTerritoryCells(shareTotals);
+  return buildRegularTerritoryOwners({
+    captureCounts: regularCounts,
+    cellAssignments,
+  });
+}
+
+function rebalanceWarTerritoryOwners({ currentCells, shareTotals, seedHint = "" } = {}) {
+  const cells = Array.isArray(currentCells) && currentCells.length
+    ? currentCells.map((cell) => ({ ...cell }))
+    : generateHexTerritoryShape().map((cell) => ({ ...cell, ownerFaction: "" }));
+  const targetCounts = allocateRegularTerritoryCells(shareTotals);
+  const currentCounts = buildZeroFactionTotals();
+  const neutralCellIds = [];
+  cells.forEach((cell) => {
+    const ownerFaction = String(cell.ownerFaction || "").trim();
+    if (allowedFactions.has(ownerFaction)) {
+      currentCounts[ownerFaction] += 1;
+    } else {
+      neutralCellIds.push(cell.id);
+    }
+  });
+
+  const ownershipById = new Map(cells.map((cell) => [cell.id, String(cell.ownerFaction || "").trim()]));
+  const rng = createSeededRandom(`territory-war-transfer:${seedHint}:${factionOrder.map((faction) => `${faction}:${roundTerritoryValue(Number(shareTotals?.[faction] || 0))}`).join("|")}`);
+  const transferPool = [...neutralCellIds];
+  shuffleArrayInPlace(transferPool, rng);
+
+  factionOrder.forEach((faction) => {
+    const surplus = Math.max(0, Number(currentCounts[faction] || 0) - Number(targetCounts[faction] || 0));
+    if (!surplus) return;
+    const ownedCellIds = cells
+      .filter((cell) => String(cell.ownerFaction || "").trim() === faction)
+      .map((cell) => cell.id);
+    shuffleArrayInPlace(ownedCellIds, rng);
+    ownedCellIds.slice(0, surplus).forEach((cellId) => {
+      ownershipById.set(cellId, contestedTerritoryOwner);
+      transferPool.push(cellId);
+    });
+  });
+
+  shuffleArrayInPlace(transferPool, rng);
+  factionOrder.forEach((faction) => {
+    const currentOwned = [...ownershipById.values()].filter((owner) => owner === faction).length;
+    const deficit = Math.max(0, Number(targetCounts[faction] || 0) - currentOwned);
+    for (let index = 0; index < deficit; index += 1) {
+      const cellId = transferPool.shift();
+      if (!cellId) break;
+      ownershipById.set(cellId, faction);
+    }
+  });
+
+  transferPool.forEach((cellId) => {
+    ownershipById.set(cellId, contestedTerritoryOwner);
+  });
+
+  return generateHexTerritoryShape().map((cell) => ({
+    ...cell,
+    ownerFaction: String(ownershipById.get(cell.id) || "").trim(),
+  }));
+}
+
+function allocateTerritoryCells(shareTotals) {
+  const positiveTotal = factionOrder.reduce((sum, faction) => sum + Math.max(0, Number(shareTotals?.[faction] || 0)), 0);
+  if (positiveTotal <= 0) {
+    return buildZeroFactionTotals();
+  }
+
+  const allocations = buildZeroFactionTotals();
+  const remainders = factionOrder.map((faction) => {
+    const value = Math.max(0, Number(shareTotals?.[faction] || 0));
+    const base = Math.floor(value);
+    allocations[faction] = base;
+    return {
+      faction,
+      remainder: value - base,
+    };
+  });
+
+  let assigned = factionOrder.reduce((sum, faction) => sum + allocations[faction], 0);
+  if (assigned < territoryCellCount) {
+    remainders
+      .sort((left, right) => {
+        const remainderDiff = right.remainder - left.remainder;
+        if (remainderDiff !== 0) {
+          return remainderDiff;
+        }
+        return factionOrder.indexOf(left.faction) - factionOrder.indexOf(right.faction);
+      })
+      .forEach((item) => {
+        if (assigned >= territoryCellCount) return;
+        allocations[item.faction] += 1;
+        assigned += 1;
+      });
+  }
+
+  if (assigned > territoryCellCount) {
+    remainders
+      .sort((left, right) => {
+        const remainderDiff = left.remainder - right.remainder;
+        if (remainderDiff !== 0) {
+          return remainderDiff;
+        }
+        return factionOrder.indexOf(right.faction) - factionOrder.indexOf(left.faction);
+      })
+      .forEach((item) => {
+        if (assigned <= territoryCellCount || allocations[item.faction] <= 0) return;
+        allocations[item.faction] -= 1;
+        assigned -= 1;
+      });
+  }
+
+  return allocations;
+}
+
+function allocateRegularTerritoryCells(shareTotals) {
+  return factionOrder.reduce((result, faction) => {
+    result[faction] = Math.max(0, Math.floor(Number(shareTotals?.[faction] || 0)));
+    return result;
+  }, {});
+}
+
+function getOccupiedTerritoryCellCount(shareTotals) {
+  const positiveTotal = factionOrder.reduce(
+    (sum, faction) => sum + Math.max(0, Number(shareTotals?.[faction] || 0)),
+    0
+  );
+  if (positiveTotal >= territoryCellCount - 0.01) {
+    return territoryCellCount;
+  }
+  return factionOrder.reduce(
+    (sum, faction) => sum + Math.max(0, Math.floor(Number(shareTotals?.[faction] || 0))),
+    0
+  );
+}
+
+function buildTerritoryOwnerCounts(cells) {
+  const captureCounts = buildZeroFactionTotals();
+  let contestedCount = 0;
+  (Array.isArray(cells) ? cells : []).forEach((cell) => {
+    const ownerFaction = String(cell?.ownerFaction || "").trim();
+    if (allowedFactions.has(ownerFaction)) {
+      captureCounts[ownerFaction] += 1;
+      return;
+    }
+    if (ownerFaction === contestedTerritoryOwner) {
+      contestedCount += 1;
+    }
+  });
+  return {
+    captureCounts,
+    contestedCount,
+  };
+}
+
+function stabilizeTerritoryShares(shareTotals) {
+  const hasMeaningfulShare = factionOrder.some((faction) => Math.abs(Number(shareTotals[faction] || 0)) >= 0.01);
+  if (!hasMeaningfulShare) {
+    return shareTotals;
+  }
+  const normalizedTotal = factionOrder.reduce((sum, faction) => sum + Number(shareTotals[faction] || 0), 0);
+  const drift = roundTerritoryValue(territoryCellCount - normalizedTotal);
+  if (Math.abs(drift) >= 0.01) {
+    const leadingFaction = factionOrder
+      .map((faction) => ({ faction, value: Number(shareTotals[faction] || 0) }))
+      .sort((left, right) => right.value - left.value)[0]?.faction || factionOrder[0];
+    shareTotals[leadingFaction] = roundTerritoryValue(Number(shareTotals[leadingFaction] || 0) + drift);
+  }
+  return shareTotals;
+}
+
+function buildZeroFactionTotals() {
+  return factionOrder.reduce((result, faction) => {
+    result[faction] = 0;
+    return result;
+  }, {});
+}
+
+function isWeekendDateKey(dateKey) {
+  const date = new Date(`${String(dateKey || "").trim()}T12:00:00+09:00`);
+  const day = date.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function roundTerritoryValue(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+let cachedTerritoryShape = null;
+
+function generateHexTerritoryShape() {
+  if (cachedTerritoryShape) {
+    return cachedTerritoryShape.map((cell) => ({ ...cell }));
+  }
+
+  const rng = createSeededRandom(territoryShapeSeed);
+  const frontier = [{ q: 0, r: 0 }];
+  const visited = new Set(["0,0"]);
+  const cells = [];
+
+  while (frontier.length && cells.length < territoryCellCount) {
+    const index = Math.floor(rng() * frontier.length);
+    const current = frontier.splice(index, 1)[0];
+    cells.push({ id: `cell-${cells.length + 1}`, q: current.q, r: current.r });
+
+    const neighbors = shuffleArray(
+      getHexNeighbors(current.q, current.r).filter((neighbor) => !visited.has(`${neighbor.q},${neighbor.r}`)),
+      rng
+    );
+
+    neighbors.forEach((neighbor, neighborIndex) => {
+      if (cells.length + frontier.length >= territoryCellCount && neighborIndex > 0) {
+        return;
+      }
+      visited.add(`${neighbor.q},${neighbor.r}`);
+      if (rng() > 0.24 || frontier.length < 12) {
+        frontier.push(neighbor);
+      }
+    });
+  }
+
+  if (cells.length < territoryCellCount) {
+    const existing = new Set(cells.map((cell) => `${cell.q},${cell.r}`));
+    const queue = [...cells];
+    while (queue.length && cells.length < territoryCellCount) {
+      const current = queue.shift();
+      getHexNeighbors(current.q, current.r).forEach((neighbor) => {
+        const key = `${neighbor.q},${neighbor.r}`;
+        if (existing.has(key) || cells.length >= territoryCellCount) return;
+        existing.add(key);
+        const next = { id: `cell-${cells.length + 1}`, q: neighbor.q, r: neighbor.r };
+        cells.push(next);
+        queue.push(next);
+      });
+    }
+  }
+
+  cachedTerritoryShape = cells.map((cell) => ({ ...cell }));
+  return cachedTerritoryShape.map((cell) => ({ ...cell }));
+}
+
+function getHexNeighbors(q, r) {
+  return [
+    { q: q + 1, r },
+    { q: q - 1, r },
+    { q, r: r + 1 },
+    { q, r: r - 1 },
+    { q: q + 1, r: r - 1 },
+    { q: q - 1, r: r + 1 },
+  ];
+}
+
+function resolveRankingUserForEntry(rank, userLookup, nicknameLookup) {
+  const nickname = String(rank?.nickname || "").trim();
+  const normalizedNickname = normalizeRankingNickname(nickname);
+  if (normalizedNickname && nicknameLookup.has(normalizedNickname)) {
+    return nicknameLookup.get(normalizedNickname) || null;
+  }
+
+  const characterName = String(rank?.characterName || "").trim();
+  if (characterName && userLookup.has(characterName)) {
+    return userLookup.get(characterName) || null;
+  }
+
+  return null;
+}
+
+function normalizeRankingNickname(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function extractRankingDateKey(matchData) {
+  const createdAtText = String(matchData?.createdAtText || "").trim();
+  const textMatch = createdAtText.match(/\d{4}-\d{2}-\d{2}/);
+  if (textMatch) {
+    return textMatch[0];
+  }
+
+  const createdAtDate = matchData?.createdAt?.toDate?.();
+  if (createdAtDate instanceof Date && !Number.isNaN(createdAtDate.getTime())) {
+    return getSeoulDateKey(createdAtDate);
+  }
+  return "";
+}
+
+function normalizeRankingDateKey(value) {
+  const matched = String(value || "").trim().match(/^\d{4}-\d{2}-\d{2}$/);
+  return matched ? matched[0] : "";
+}
+
+function getSeoulDateKey(date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function createSeededRandom(seedInput) {
+  let seed = 2166136261;
+  const text = String(seedInput || "");
+  for (let index = 0; index < text.length; index += 1) {
+    seed ^= text.charCodeAt(index);
+    seed = Math.imul(seed, 16777619);
+  }
+  return () => {
+    seed += 0x6d2b79f5;
+    let value = seed;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffleArray(items, rng) {
+  const next = [...items];
+  shuffleArrayInPlace(next, rng);
+  return next;
+}
+
+function shuffleArrayInPlace(items, rng) {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(rng() * (index + 1));
+    [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
+  }
 }
 
 function isSafeItem(item) {
@@ -3630,6 +5466,5 @@ async function findUserSnapshotByCharacterName(characterName) {
 
   return snapshot;
 }
-
 
 

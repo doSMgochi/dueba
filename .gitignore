@@ -33,4 +33,13 @@ Thumbs.db
 .vscode/
 .idea/
 
+# 임시 스크립트
+.tmp-*.js
+.tmp-*.txt
+temp-*.js
+functions/.tmp-*.js
+functions/.npm-cache/
+functions/scripts/
+crawler/insert_test_match.py
+
 AGENTS.md

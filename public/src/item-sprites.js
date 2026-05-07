@@ -4766,7 +4766,18 @@ itemSpriteCatalog.forEach((item) => {
     }
   });
 });
-const spriteLabelMap = new Map(itemSpriteCatalog.map((item) => [String(item.label || "").trim(), item]));
+const spriteLabelMap = new Map();
+const spriteNormalizedLabelMap = new Map();
+itemSpriteCatalog.forEach((item) => {
+  const exactLabel = String(item.label || "").trim();
+  if (exactLabel && !spriteLabelMap.has(exactLabel)) {
+    spriteLabelMap.set(exactLabel, item);
+  }
+  const normalizedLabel = normalizeSpriteLookupLabel(exactLabel);
+  if (normalizedLabel && !spriteNormalizedLabelMap.has(normalizedLabel)) {
+    spriteNormalizedLabelMap.set(normalizedLabel, item);
+  }
+});
 export const ITEM_COLOR_PRESETS = [
   { id: "", label: "기본", filter: "" },
   { id: "crimson", label: "크림슨", filter: "hue-rotate(-18deg) saturate(1.55) brightness(1.02) contrast(1.04)" },
@@ -4840,7 +4851,8 @@ export function getItemSprite(spriteKey) {
 }
 
 export function findItemSpriteByLabel(label) {
-  return spriteLabelMap.get(String(label || "").trim()) || null;
+  const exactLabel = String(label || "").trim();
+  return spriteLabelMap.get(exactLabel) || spriteNormalizedLabelMap.get(normalizeSpriteLookupLabel(exactLabel)) || null;
 }
 
 export function getItemSpritesByFilter(searchText = "", category = "") {
@@ -4876,7 +4888,7 @@ export function buildItemSpritePicker({ selectedKey = "", inputName = "spriteKey
   const spriteButtons = getVisibleItemSpriteCatalog()
     .map((sprite) => {
       const isSelected = sprite.key === normalizedKey;
-      const encodedPath = encodeAssetPath(sprite.path);
+      const spriteUrl = getItemSpriteUrl(sprite);
       return `
         <button
           type="button"
@@ -4889,7 +4901,7 @@ export function buildItemSpritePicker({ selectedKey = "", inputName = "spriteKey
           aria-pressed="${isSelected ? "true" : "false"}"
         >
           <span class="sprite-picker-option-image-wrap">
-            <img src="${escapeHtml(encodedPath)}" alt="${escapeHtml(sprite.label)}" class="sprite-picker-option-image" loading="lazy" />
+            <img src="${escapeHtml(spriteUrl)}" alt="${escapeHtml(sprite.label)}" class="sprite-picker-option-image" loading="lazy"${buildItemSpriteFallbackAttributes(sprite)} />
           </span>
           <span class="sprite-picker-option-label">${escapeHtml(sprite.label)}</span>
           <span class="sprite-picker-option-category">${escapeHtml(normalizeSpriteCategory(sprite.category))}</span>
@@ -4923,15 +4935,21 @@ export function buildItemSpritePicker({ selectedKey = "", inputName = "spriteKey
 
 export function renderItemVisual(item, { large = false, extraClass = "", overlayHtml = "" } = {}) {
   const sprite = getItemSprite(item?.spriteKey) || findItemSpriteByLabel(item?.name) || findItemSpriteByLabel(item?.shortLabel);
-  const fallbackIcon = escapeHtml(item?.icon || sprite?.fallbackIcon || "🎁");
+  const rawFallbackIcon =
+    item?.icon && item.icon !== "🎁"
+      ? item.icon
+      : sprite?.fallbackIcon && sprite.fallbackIcon !== "🎁"
+        ? sprite.fallbackIcon
+        : "";
+  const fallbackIcon = escapeHtml(rawFallbackIcon);
   const className = ["dot-slot", large ? "large" : "", sprite ? "has-image" : "", extraClass].filter(Boolean).join(" ");
   const imageStyle = buildItemImageStyleAttribute(item);
 
   if (sprite) {
-    return `<div class="${className}"><img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="dot-slot-image" loading="lazy"${imageStyle} />${overlayHtml}</div>`;
+    return `<div class="${className}"><img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="dot-slot-image" loading="lazy"${buildItemSpriteFallbackAttributes(sprite)}${imageStyle} />${overlayHtml}</div>`;
   }
 
-  return `<div class="${className}"><span class="dot-slot-fallback">${fallbackIcon}</span>${overlayHtml}</div>`;
+  return `<div class="${className}">${fallbackIcon ? `<span class="dot-slot-fallback">${fallbackIcon}</span>` : ""}${overlayHtml}</div>`;
 }
 
 export function normalizeItemColorPreset(presetId) {
@@ -4948,12 +4966,93 @@ export function buildItemImageStyleAttribute(item) {
   return filter ? ` style="filter:${escapeHtml(filter)}"` : "";
 }
 
+const itemSpriteUrlCache = new Map();
+const itemSpriteFallbackUrlCache = new Map();
+const itemSpritePreloadCache = new Map();
+
+export function getItemSpriteFallbackUrl(spriteOrPath) {
+  const path = typeof spriteOrPath === "string" ? spriteOrPath : spriteOrPath?.path;
+  const normalizedPath = String(path || "").trim();
+  if (itemSpriteFallbackUrlCache.has(normalizedPath)) {
+    return itemSpriteFallbackUrlCache.get(normalizedPath) || "";
+  }
+  if (!normalizedPath.startsWith("/assets/item-dots/")) {
+    itemSpriteFallbackUrlCache.set(normalizedPath, "");
+    return "";
+  }
+  const fallbackUrl = mapItemDotAssetPathToStorageUrl(normalizedPath);
+  itemSpriteFallbackUrlCache.set(normalizedPath, fallbackUrl);
+  return fallbackUrl;
+}
+
+export function buildItemSpriteFallbackAttributes(spriteOrPath) {
+  const fallbackUrl = getItemSpriteFallbackUrl(spriteOrPath);
+  if (!fallbackUrl) {
+    return ' onerror="this.style.display=\'none\'"';
+  }
+  return ` data-fallback-src="${escapeHtml(fallbackUrl)}" onerror="if(this.dataset.fallbackSrc&&this.src!==this.dataset.fallbackSrc){this.src=this.dataset.fallbackSrc;this.removeAttribute('data-fallback-src');return;}this.style.display='none';"`;
+}
+
 export function getItemSpriteUrl(spriteOrPath) {
   const path = typeof spriteOrPath === "string" ? spriteOrPath : spriteOrPath?.path;
-  if (/^(https?:|data:|blob:)/i.test(String(path || ""))) {
-    return String(path || "");
+  const normalizedPath = String(path || "").trim();
+  if (itemSpriteUrlCache.has(normalizedPath)) {
+    return itemSpriteUrlCache.get(normalizedPath) || "";
   }
-  return mapItemDotAssetPathToStorageUrl(path) || encodeAssetPath(path);
+  if (/^(https?:|data:|blob:)/i.test(normalizedPath)) {
+    itemSpriteUrlCache.set(normalizedPath, normalizedPath);
+    return normalizedPath;
+  }
+  const spriteUrl = normalizedPath.startsWith("/assets/item-dots/")
+    ? encodeAssetPath(normalizedPath)
+    : mapItemDotAssetPathToStorageUrl(normalizedPath) || encodeAssetPath(normalizedPath);
+  itemSpriteUrlCache.set(normalizedPath, spriteUrl);
+  return spriteUrl;
+}
+
+export function preloadImageUrl(url) {
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) {
+    return Promise.resolve(false);
+  }
+  if (itemSpritePreloadCache.has(normalizedUrl)) {
+    return itemSpritePreloadCache.get(normalizedUrl);
+  }
+
+  const preloadPromise = new Promise((resolve) => {
+    if (typeof Image === "undefined") {
+      resolve(false);
+      return;
+    }
+
+    const image = new Image();
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    image.decoding = "async";
+    image.onload = () => finish(true);
+    image.onerror = () => finish(false);
+    image.src = normalizedUrl;
+
+    if (image.complete) {
+      finish(true);
+    }
+  });
+
+  itemSpritePreloadCache.set(normalizedUrl, preloadPromise);
+  return preloadPromise;
+}
+
+export function preloadItemSprite(spriteOrPath) {
+  const urls = [getItemSpriteUrl(spriteOrPath), getItemSpriteFallbackUrl(spriteOrPath)].filter(Boolean);
+  if (!urls.length) {
+    return Promise.resolve([]);
+  }
+  return Promise.allSettled(urls.map((url) => preloadImageUrl(url)));
 }
 
 export function getItemSpriteCategory(spriteKey) {
@@ -4964,17 +5063,18 @@ export function getItemSpriteCategory(spriteKey) {
   return normalizeSpriteCategory(spriteCategory);
 }
 
-export function registerCustomItemSprite({ url, label = "" } = {}) {
+export function registerCustomItemSprite({ url, label = "", category = "커스텀" } = {}) {
   const normalizedUrl = String(url || "").trim();
   if (!normalizedUrl) return null;
   const key = `custom:${normalizedUrl}`;
+  const normalizedCategory = normalizeSpriteCategory(category || "커스텀");
   const sprite = {
     key,
     label: buildCustomSpriteLabel(label || normalizedUrl),
-    category: "커스텀",
+    category: normalizedCategory,
     path: normalizedUrl,
     fallbackIcon: "🎁",
-    searchText: `커스텀 ${buildCustomSpriteLabel(label || normalizedUrl)} ${normalizedUrl}`.toLowerCase(),
+    searchText: `${normalizedCategory} ${buildCustomSpriteLabel(label || normalizedUrl)} ${normalizedUrl}`.toLowerCase(),
   };
   const nextCatalog = [sprite, ...customItemSpriteCatalog.filter((item) => item.key !== key)].slice(0, 60);
   customItemSpriteCatalog = nextCatalog;
@@ -4994,7 +5094,7 @@ function buildSelectedSpriteMarkup(sprite) {
   return `
     <div class="sprite-picker-selected-card">
       <span class="sprite-picker-selected-thumb">
-        <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(sprite.label)}" class="sprite-picker-selected-image" loading="lazy" />
+        <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(sprite.label)}" class="sprite-picker-selected-image" loading="lazy"${buildItemSpriteFallbackAttributes(sprite)} />
       </span>
       <span class="sprite-picker-selected-copy">
         <strong>${escapeHtml(sprite.label)}</strong>
@@ -5084,6 +5184,16 @@ function mapItemDotAssetPathToStorageUrl(path) {
   }
   const objectPath = normalizedPath.replace(/^\//, "");
   return `https://firebasestorage.googleapis.com/v0/b/${ITEM_DOT_STORAGE_BUCKET}/o/${encodeURIComponent(objectPath)}?alt=media&token=${ITEM_DOT_STORAGE_TOKEN}`;
+}
+
+function normalizeSpriteLookupLabel(label) {
+  return String(label || "")
+    .trim()
+    .replace(/^마작패\s*[:：]\s*/i, "")
+    .replace(/\s+/g, "")
+    .replace(/[_-]/g, "")
+    .replace(/패$/u, "")
+    .toLowerCase();
 }
 
 function escapeHtml(value) {

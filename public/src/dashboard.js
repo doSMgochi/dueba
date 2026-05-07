@@ -19,6 +19,7 @@ import {
 import { db, storage } from "./firebase.js";
 import {
   buildItemImageStyleAttribute,
+  buildItemSpriteFallbackAttributes,
   buildItemSpritePicker,
   getItemColorPresetFilter,
   getItemSprite,
@@ -27,6 +28,8 @@ import {
   getItemSpriteUrl,
   itemSpriteCategories,
   normalizeSpriteCategory,
+  preloadImageUrl,
+  preloadItemSprite,
   registerCustomItemSprite,
   renderItemVisual,
 } from "./item-sprites.js";
@@ -42,6 +45,7 @@ import {
   dismissAnnouncement,
   ensureMahjongProfileItems,
   getRankingBoard,
+  getRankingTerritoryAdminSettings,
   listAdminLogs,
   listBugReports,
   markNotificationRead,
@@ -56,14 +60,19 @@ import {
   updateProfileDecorations,
   useInventoryItem,
   updateItemDefinition,
+  updateRankingTerritoryAdminSettings,
   updateProfileSealImage,
+  saveRankingSnapshot,
+  clearPastRankingSnapshots,
 } from "./auth.js";
 
 const SYSTEM_INVENTORY_ITEM_NAMES = new Set(["망치", "택배 상자", "택배상자", "포장지", "반송장", "폐기 승인서", "거절권"]);
 const PROFILE_FACTION_OPTIONS = ["매화", "난초", "국화", "대나무"];
+const EMPTY_FACTION_SELECTOR_VALUE = "__empty__";
 
 export const menuDefinitions = [
   { id: "ranking", label: "랭킹" },
+  { id: "territory", label: "지도" },
   // 대국 정보 메뉴는 현재 미사용 상태라 임시 비활성화합니다.
   // { id: "match", label: "대국 정보" },
   { id: "match-results", label: "대국 결과" },
@@ -112,6 +121,35 @@ const sampleLiveMatches = [
 ];
 
 let activeAdminSection = "user-adjust";
+let latestAdminTerritorySettings = null;
+
+function preloadQuickProfileImages(profile) {
+  if (!profile) {
+    return Promise.resolve([]);
+  }
+
+  const preloadTasks = [];
+  const sealImageUrl = String(profile.profileSealImage || "").trim();
+  if (sealImageUrl) {
+    preloadTasks.push(preloadImageUrl(sealImageUrl));
+  }
+
+  const profileDecorations = normalizeProfileDecorations(profile.profileDecorations);
+  for (const decoration of profileDecorations) {
+    if (decoration?.spriteKey) {
+      preloadTasks.push(preloadItemSprite(decoration.spriteKey));
+    }
+  }
+
+  const inventoryKinds = buildGroupedInventoryItems(profile.inventory || []);
+  for (const { item } of inventoryKinds) {
+    if (item?.spriteKey) {
+      preloadTasks.push(preloadItemSprite(item.spriteKey));
+    }
+  }
+
+  return Promise.allSettled(preloadTasks);
+}
 let currentNoticeModalId = null;
 let adminLogPages = { operate: 0, notice: 0 };
 let activeResultMode = "ranked-4p-hanchan";
@@ -122,13 +160,18 @@ let shopPage = 0;
 let pendingAdminItemIds = [];
 let selectedParcelItemKeys = [];
 let bugReportPage = 0;
+let itemDbPage = 0;
 let adminItemCatalogCache = [];
 let adminItemCatalogPromise = null;
 let rouletteDropItemMode = false;
 let ensureMahjongProfileItemsPromise = null;
 let hasEnsuredMahjongProfileItems = false;
 const quickProfileCacheTtl = 60 * 1000;
-let rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
+const itemDbPageSize = 24;
+const territoryCacheTtl = 2 * 60 * 1000;
+const territorySnapshotStorageKey = "dueba.territory-snapshot.v1";
+let rankingBoardCache = { data: null, date: "", fetchedAt: 0, promise: null, promiseDate: "" };
+let activeRankingDate = "";
 let activeAdminItemSection = "create";
 let profileDecorationEditMode = false;
 let mobileInfoExpanded = false;
@@ -144,13 +187,33 @@ function hydrateCustomSpritesFromItems(items = []) {
     if (!spriteKey.startsWith("custom:")) return;
     const customUrl = spriteKey.slice("custom:".length).trim();
     if (!customUrl) return;
-    const searchable = `${String(item?.name || "").trim()} ${String(item?.shortLabel || "").trim()} ${customUrl}`;
-    if (!searchable.includes("날개")) return;
     registerCustomItemSprite({
       url: customUrl,
       label: item?.name || item?.shortLabel || customUrl,
+      category: item?.category || "커스텀",
     });
   });
+}
+
+function hydrateCustomSpritesFromProfile(profile) {
+  if (!profile || typeof profile !== "object") return;
+
+  const registerFromItem = (item, fallbackCategory) => {
+    const spriteKey = String(item?.spriteKey || "").trim();
+    if (!spriteKey.startsWith("custom:")) return;
+    const customUrl = spriteKey.slice("custom:".length).trim();
+    if (!customUrl) return;
+    registerCustomItemSprite({
+      url: customUrl,
+      label: item?.name || item?.shortLabel || customUrl,
+      category: item?.category || fallbackCategory || "커스텀",
+    });
+  };
+
+  normalizeProfileDecorations(profile.profileDecorations).forEach((item) => registerFromItem(item, "프로필 꾸미기"));
+  (Array.isArray(profile.inventory) ? profile.inventory : []).forEach((item) =>
+    registerFromItem(normalizeSystemInventoryItemForDisplay(item), item?.category || "기타 아이템")
+  );
 }
 
 async function ensureAdminMahjongProfileItems(onToast) {
@@ -161,14 +224,22 @@ async function ensureAdminMahjongProfileItems(onToast) {
       const result = await ensureMahjongProfileItems();
       hasEnsuredMahjongProfileItems = true;
       const createdCount = Math.max(0, Number(result?.createdCount || 0));
-      if (createdCount > 0) {
+      const updatedCount = Math.max(0, Number(result?.updatedCount || 0));
+      if (createdCount > 0 || updatedCount > 0) {
         await loadAdminItemCatalog(true);
         await hydrateAdminItemOptions();
         refreshAdminItemSelectors({ root: document });
         if (document.querySelector("#item-db-grid")) {
           await hydrateItemDatabasePanel();
         }
-        onToast?.(`마작패 아이템 ${createdCount}개를 추가했습니다.`);
+        const fragments = [];
+        if (createdCount > 0) {
+          fragments.push(`${createdCount}개 추가`);
+        }
+        if (updatedCount > 0) {
+          fragments.push(`${updatedCount}개 보정`);
+        }
+        onToast?.(`마작패 아이템 ${fragments.join(", ")} 완료`);
       }
       return result;
     } catch (error) {
@@ -192,35 +263,91 @@ async function withPendingToast(onToast, task) {
   }
 }
 
-async function getCachedRankingBoard(forceRefresh = false) {
+async function getCachedRankingBoard(forceRefresh = false, date = activeRankingDate) {
   const now = Date.now();
-  if (!forceRefresh && rankingBoardCache.data && now - rankingBoardCache.fetchedAt < quickProfileCacheTtl) {
+  const requestedDate = String(date || "").trim();
+  if (
+    !forceRefresh &&
+    rankingBoardCache.data &&
+    rankingBoardCache.date === requestedDate &&
+    now - rankingBoardCache.fetchedAt < quickProfileCacheTtl
+  ) {
     return rankingBoardCache.data;
   }
 
-  if (rankingBoardCache.promise) {
+  if (rankingBoardCache.promise && rankingBoardCache.promiseDate === requestedDate) {
     return rankingBoardCache.promise;
   }
 
-  rankingBoardCache.promise = getRankingBoard()
+  rankingBoardCache.promise = getRankingBoard(requestedDate)
     .then((data) => {
       rankingBoardCache = {
-        data: Array.isArray(data) ? data : [],
+        data: data && typeof data === "object" ? data : {},
+        date: requestedDate,
         fetchedAt: Date.now(),
         promise: null,
+        promiseDate: "",
       };
+      syncCachedTerritoryFromBoard(rankingBoardCache.data);
       return rankingBoardCache.data;
     })
     .catch((error) => {
       rankingBoardCache.promise = null;
+      rankingBoardCache.promiseDate = "";
       throw error;
     });
+  rankingBoardCache.promiseDate = requestedDate;
 
   return rankingBoardCache.promise;
 }
 
+async function getCurrentRankingBoardSnapshot(forceRefresh = false) {
+  return getCachedRankingBoard(forceRefresh, "");
+}
+
 function invalidateQuickProfileCaches() {
-  rankingBoardCache = { data: null, fetchedAt: 0, promise: null };
+  rankingBoardCache = { data: null, date: "", fetchedAt: 0, promise: null, promiseDate: "" };
+}
+
+function readCachedTerritorySnapshot() {
+  try {
+    const raw = window.localStorage.getItem(territorySnapshotStorageKey);
+    const parsed = JSON.parse(raw || "{}");
+    if (!parsed || typeof parsed !== "object") return null;
+    const territory = parsed.territory;
+    if (!territory || !Array.isArray(territory.cells) || !territory.cells.length) {
+      return null;
+    }
+    return {
+      territory,
+      version: String(parsed.version || territory.version || "").trim(),
+      checkedAt: Number(parsed.checkedAt || 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedTerritorySnapshot(territory) {
+  if (!territory || !Array.isArray(territory.cells) || !territory.cells.length) return;
+  try {
+    window.localStorage.setItem(
+      territorySnapshotStorageKey,
+      JSON.stringify({
+        territory,
+        version: String(territory.version || "").trim(),
+        checkedAt: Date.now(),
+      })
+    );
+  } catch {
+    // Ignore storage failures and fall back to in-memory caching.
+  }
+}
+
+function syncCachedTerritoryFromBoard(board) {
+  const territory = board?.territory;
+  if (!territory || !Array.isArray(territory.cells) || !territory.cells.length) return;
+  writeCachedTerritorySnapshot(territory);
 }
 
 export function buildDashboard({
@@ -265,6 +392,10 @@ export function buildDashboard({
 
     syncMobileInfoPanel();
   }
+  if (statsStrip) {
+    ensureDashboardFactionBar(statsStrip);
+    void hydrateDashboardFactionBar();
+  }
 
   menuTabs.innerHTML = visibleMenus
     .map((menu) => {
@@ -286,6 +417,7 @@ export function buildDashboard({
   menuContent.innerHTML = renderMenuContent(safeActiveMenuId, profile);
 
   if (safeActiveMenuId === "ranking") void hydrateRankingPanel();
+  if (safeActiveMenuId === "territory") void hydrateTerritoryPanel();
   if (safeActiveMenuId === "shop") void hydrateShopPanel({ onProfilePatched, onToast });
   if (safeActiveMenuId === "item-db") void hydrateItemDatabasePanel();
   if (safeActiveMenuId === "inventory") attachParcelForm({ profile, onProfilePatched, onToast });
@@ -437,22 +569,73 @@ function renderMenuContent(menuId, profile) {
     ranking: `
       <article class="content-card full">
         <h3>랭킹</h3>
-        <div class="table-wrap">
-          <table class="log-table ranking-table">
-            <thead>
-              <tr>
-                <th>순위</th>
-                <th>캐릭터명</th>
-                <th>작혼 닉네임</th>
-                <th>랭킹전 포인트</th>
-                <th>보유 환</th>
-                <th>파벌</th>
-              </tr>
-            </thead>
-            <tbody id="ranking-table-body">
-              <tr><td colspan="6" class="table-empty">랭킹을 불러오는 중입니다.</td></tr>
-            </tbody>
-          </table>
+        <div class="ranking-shell">
+          <div class="ranking-toolbar">
+            <div class="ranking-date-nav">
+              <button type="button" class="secondary-button" data-ranking-date-nav="prev">이전 날짜</button>
+              <strong id="ranking-date-label">랭킹을 불러오는 중입니다.</strong>
+              <button type="button" class="secondary-button" data-ranking-date-nav="next">다음 날짜</button>
+            </div>
+            <p id="ranking-phase-label" class="muted">현재 진행 상태를 불러오는 중입니다.</p>
+          </div>
+          <div class="ranking-mode-grid">
+            <article class="ranking-mode-panel">
+              <div class="ranking-mode-head">
+                <p class="eyebrow">4인 마작</p>
+              </div>
+              <div class="table-wrap">
+                <table class="log-table ranking-table">
+                  <thead>
+                    <tr>
+                      <th>순위</th>
+                      <th>캐릭터명</th>
+                      <th>작혼 닉네임</th>
+                      <th>보유 환</th>
+                      <th>점수</th>
+                      <th>파벌</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ranking-table-body-4p">
+                    <tr><td colspan="6" class="table-empty">랭킹을 불러오는 중입니다.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+            <article class="ranking-mode-panel">
+              <div class="ranking-mode-head">
+                <p class="eyebrow">3인 마작</p>
+              </div>
+              <div class="table-wrap">
+                <table class="log-table ranking-table">
+                  <thead>
+                    <tr>
+                      <th>순위</th>
+                      <th>캐릭터명</th>
+                      <th>작혼 닉네임</th>
+                      <th>보유 환</th>
+                      <th>점수</th>
+                      <th>파벌</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ranking-table-body-3p">
+                    <tr><td colspan="6" class="table-empty">랭킹을 불러오는 중입니다.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </div>
+        </div>
+      </article>
+    `,
+    territory: `
+      <article class="content-card full">
+        <h3>지도</h3>
+        <div class="ranking-shell">
+          <section class="territory-panel">
+            <div id="territory-page-map" class="ranking-territory-map">
+              <p class="muted">지도를 불러오는 중입니다.</p>
+            </div>
+          </section>
         </div>
       </article>
     `,
@@ -689,9 +872,11 @@ function renderMenuContent(menuId, profile) {
         <div class="admin-shell">
           <div class="admin-section-tabs">
             <button type="button" class="tab-button ${activeAdminSection === "user-adjust" ? "active" : ""}" data-admin-section="user-adjust">유저 조정</button>
+            <button type="button" class="tab-button ${activeAdminSection === "territory-rules" ? "active" : ""}" data-admin-section="territory-rules">영토/정산</button>
             <button type="button" class="tab-button ${activeAdminSection === "items" ? "active" : ""}" data-admin-section="items">아이템</button>
             <button type="button" class="tab-button ${activeAdminSection === "notice" ? "active" : ""}" data-admin-section="notice">공지 작성</button>
             <button type="button" class="tab-button ${activeAdminSection === "account" ? "active" : ""}" data-admin-section="account">계정 관리</button>
+            <button type="button" class="tab-button ${activeAdminSection === "ranking-manage" ? "active" : ""}" data-admin-section="ranking-manage">랭킹 관리</button>
           </div>
           <div id="admin-section-body"></div>
         </div>
@@ -828,7 +1013,11 @@ async function hydrateItemDatabasePanel() {
       return;
     }
 
-    grid.innerHTML = itemDbItems
+    const pageCount = Math.max(1, Math.ceil(itemDbItems.length / itemDbPageSize));
+    itemDbPage = Math.min(itemDbPage, pageCount - 1);
+    const pagedItems = itemDbItems.slice(itemDbPage * itemDbPageSize, itemDbPage * itemDbPageSize + itemDbPageSize);
+
+    grid.innerHTML = pagedItems
       .map(
         (item) => {
           const displayItem = normalizeSystemInventoryItemForDisplay(item);
@@ -845,6 +1034,26 @@ async function hydrateItemDatabasePanel() {
         }
       )
       .join("");
+    grid.insertAdjacentHTML(
+      "beforeend",
+      `
+        <article class="content-card full item-db-pager-card">
+          <div class="admin-log-pager">
+            <button type="button" class="ghost-button compact-button" data-item-db-page="prev" ${itemDbPage === 0 ? "disabled" : ""}>이전</button>
+            <span class="muted">${itemDbPage + 1} / ${pageCount}</span>
+            <button type="button" class="ghost-button compact-button" data-item-db-page="next" ${itemDbPage >= pageCount - 1 ? "disabled" : ""}>다음</button>
+          </div>
+        </article>
+      `
+    );
+    grid.querySelectorAll("[data-item-db-page]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const direction = button.dataset.itemDbPage;
+        if (direction === "prev" && itemDbPage > 0) itemDbPage -= 1;
+        if (direction === "next" && itemDbPage < pageCount - 1) itemDbPage += 1;
+        await hydrateItemDatabasePanel();
+      });
+    });
   } catch (_error) {
     grid.innerHTML = '<article class="content-card full"><p class="muted">아이템 DB를 불러오지 못했습니다.</p></article>';
   }
@@ -1249,8 +1458,12 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
     content.innerHTML = '<div class="panel empty-state">간단 프로필을 불러오는 중입니다.</div>';
   }
 
-  const rankings = await getCachedRankingBoard().catch(() => []);
-  const normalizedRankings = buildDisplayRankings(rankings);
+  hydrateCustomSpritesFromProfile(profile);
+  const [rankingBoard] = await Promise.all([
+    getCachedRankingBoard().catch(() => ({})),
+    preloadQuickProfileImages(profile).catch(() => []),
+  ]);
+  const normalizedRankings = buildDisplayRankings(rankingBoard?.combinedRankings || []);
   const rankEntry = normalizedRankings.find(
     (item) =>
       item.uid === profile.uid ||
@@ -1289,7 +1502,7 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
           const tooltip = escapeHtml(buildInventoryTooltipText(item));
           return `
             <div class="profile-item-chip inventory-tooltip" data-tooltip="${tooltip}">
-              ${renderProfileItemVisual(item)}
+              ${renderProfileItemVisual(item, { eager: true })}
               ${count > 1 ? `<span class="profile-item-count">x${count}</span>` : ""}
             </div>
           `;
@@ -1305,13 +1518,13 @@ async function showProfileQuickModal({ profile, viewerProfile, onProfilePatched,
         <div class="profile-card-frame profile-card-frame-outer" aria-hidden="true"></div>
         <div class="profile-card-frame profile-card-frame-inner" aria-hidden="true"></div>
         <div class="profile-decoration-layer" data-profile-decoration-layer data-profile-decoration-editable="${canEditProfileDecorations ? "true" : "false"}">
-          ${profileDecorations.map((item) => renderProfileDecorationVisual(item, canEditProfileDecorations)).join("")}
+          ${profileDecorations.map((item) => renderProfileDecorationVisual(item, canEditProfileDecorations, { eager: true })).join("")}
         </div>
         <div class="profile-lobby-visual">
           <div class="profile-seal-panel">
             ${
               profile.profileSealImage
-                ? `<img src="${escapeHtml(profile.profileSealImage)}" alt="프로필 인장" class="profile-seal-art" />`
+                ? `<img src="${escapeHtml(profile.profileSealImage)}" alt="프로필 인장" class="profile-seal-art" loading="eager" fetchpriority="high" decoding="async" />`
                 : `<div class="profile-seal-fallback">인장</div>`
             }
           </div>
@@ -1790,33 +2003,14 @@ async function hydrateTodoPanel(uid) {
 }
 
 async function hydrateRankingPanel() {
-  const body = document.querySelector("#ranking-table-body");
-  if (!body) return;
+  const body4p = document.querySelector("#ranking-table-body-4p");
+  const body3p = document.querySelector("#ranking-table-body-3p");
+  const dateLabel = document.querySelector("#ranking-date-label");
+  const phaseLabel = document.querySelector("#ranking-phase-label");
+  if (!body4p || !body3p || !dateLabel || !phaseLabel) return;
 
-  try {
-    const rankings = buildDisplayRankings(await getRankingBoard());
-
-    if (!rankings.length) {
-      body.innerHTML = '<tr><td colspan="6" class="table-empty">표시할 랭킹이 없습니다.</td></tr>';
-      return;
-    }
-
-    body.innerHTML = rankings
-      .map((item) => {
-        return `
-          <tr>
-            <td>${item.displayRank}</td>
-            <td><button type="button" class="text-button ranking-profile-button" data-ranking-character="${escapeHtml(item.characterName || "")}"${buildCharacterNameStyleAttribute(item)}>${buildDisplayedCharacterNameMarkup(item)}</button></td>
-            <td>${escapeHtml(item.nickname || "-")}</td>
-            <td>${Number(item.rankingPoints || 0)}</td>
-            <td>${Number(item.currency || 0)} 환</td>
-            <td>${escapeHtml(getDisplayedRankingFactionName(item) || "-")}</td>
-          </tr>
-        `;
-      })
-      .join("");
-
-    body.querySelectorAll("[data-ranking-character]").forEach((button) => {
+  const bindRankingProfileButtons = (root) => {
+    root.querySelectorAll("[data-ranking-character]").forEach((button) => {
       button.addEventListener("click", async () => {
         const characterName = button.dataset.rankingCharacter || "";
         if (!characterName) return;
@@ -1837,15 +2031,114 @@ async function hydrateRankingPanel() {
             onToast: () => {},
           });
         } catch (_error) {
-          body.insertAdjacentHTML(
+          root.insertAdjacentHTML(
             "afterbegin",
-            '<tr><td colspan="6" class="table-empty">프로필을 불러오지 못했습니다.</td></tr>'
+            '<tr><td colspan="5" class="table-empty">프로필을 불러오지 못했습니다.</td></tr>'
           );
         }
       });
     });
+  };
+
+  try {
+    let board = await getCachedRankingBoard(false, activeRankingDate);
+    const candidateDates = Array.isArray(board?.availableDates) ? board.availableDates : [];
+    const selectedDateBeforeRedirect = String(board?.selectedDate || "").trim();
+    const currentRegularPeriodKey = String(board?.currentRegularPeriodKey || "").trim();
+    const latestDate = String(candidateDates[0] || "").trim();
+    const isSameDayRegularPageSelected =
+      String(board?.currentPhase || board?.phase || "regular").trim() === "war" &&
+      selectedDateBeforeRedirect &&
+      currentRegularPeriodKey &&
+      selectedDateBeforeRedirect === currentRegularPeriodKey &&
+      latestDate &&
+      latestDate !== selectedDateBeforeRedirect;
+    if (isSameDayRegularPageSelected) {
+      activeRankingDate = latestDate;
+      board = await getCachedRankingBoard(false, activeRankingDate);
+    }
+    const selectedDate = String(board?.selectedDate || "").trim();
+    const selectedDateLabel = String(board?.selectedDateLabel || "").trim();
+    const availableDates = Array.isArray(board?.availableDates) ? board.availableDates : [];
+    const scoreUnit = String(board?.scoreUnit || "points").trim();
+    const mode4p = buildDisplayRankings(board?.modes?.["ranked-4p-hanchan"]?.rankings || []);
+    const mode3p = buildDisplayRankings(board?.modes?.["ranked-3p-hanchan"]?.rankings || []);
+    activeRankingDate = selectedDate;
+    dateLabel.textContent = selectedDateLabel || formatRankingDateLabel(selectedDate);
+    const currentPhase = String(board?.currentPhase || board?.phase || "regular").trim();
+    phaseLabel.textContent = currentPhase === "war"
+      ? "현재는 쟁탈전 진행 중입니다."
+      : "현재는 정규전 진행 중입니다.";
+
+    renderRankingModeTable(body4p, mode4p, scoreUnit);
+    renderRankingModeTable(body3p, mode3p, scoreUnit);
+    bindRankingProfileButtons(body4p);
+    bindRankingProfileButtons(body3p);
+
+    const currentIndex = availableDates.findIndex((item) => item === selectedDate);
+    const prevDate = currentIndex >= 0 ? availableDates[currentIndex + 1] || "" : "";
+    const nextDate = currentIndex > 0 ? availableDates[currentIndex - 1] || "" : "";
+    const prevButton = document.querySelector('[data-ranking-date-nav="prev"]');
+    const nextButton = document.querySelector('[data-ranking-date-nav="next"]');
+    if (prevButton) {
+      prevButton.disabled = !prevDate;
+      prevButton.onclick = async () => {
+        if (!prevDate) return;
+        activeRankingDate = prevDate;
+        await hydrateRankingPanel();
+      };
+    }
+    if (nextButton) {
+      nextButton.disabled = !nextDate;
+      nextButton.onclick = async () => {
+        if (!nextDate) return;
+        activeRankingDate = nextDate;
+        await hydrateRankingPanel();
+      };
+    }
+
   } catch (_error) {
-    body.innerHTML = '<tr><td colspan="6" class="table-empty">랭킹을 불러오지 못했습니다.</td></tr>';
+    body4p.innerHTML = '<tr><td colspan="5" class="table-empty">랭킹을 불러오지 못했습니다.</td></tr>';
+    body3p.innerHTML = '<tr><td colspan="5" class="table-empty">랭킹을 불러오지 못했습니다.</td></tr>';
+    dateLabel.textContent = "랭킹을 불러오지 못했습니다.";
+    phaseLabel.textContent = "현재 진행 상태를 불러오지 못했습니다.";
+  }
+}
+
+async function hydrateTerritoryPanel() {
+  const map = document.querySelector("#territory-page-map");
+  if (!map) return;
+
+  let renderedVersion = "";
+  const inMemoryTerritory = rankingBoardCache.data?.territory;
+  if (inMemoryTerritory?.cells?.length) {
+    renderedVersion = String(inMemoryTerritory.version || "").trim();
+    map.innerHTML = buildTerritoryMapMarkup(inMemoryTerritory);
+  } else {
+    const cachedSnapshot = readCachedTerritorySnapshot();
+    if (cachedSnapshot?.territory?.cells?.length) {
+      renderedVersion = cachedSnapshot.version;
+      map.innerHTML = buildTerritoryMapMarkup(cachedSnapshot.territory);
+    }
+  }
+
+  try {
+    const board = await getCachedRankingBoard(false, activeRankingDate);
+    const nextTerritory = board?.territory;
+    const nextVersion = String(nextTerritory?.version || "").trim();
+    if (!nextTerritory?.cells?.length) {
+      if (!renderedVersion) {
+        map.innerHTML = buildTerritoryMapMarkup(null);
+      }
+      return;
+    }
+    if (nextVersion !== renderedVersion || !renderedVersion) {
+      map.innerHTML = buildTerritoryMapMarkup(nextTerritory);
+    }
+  } catch (_error) {
+    if (!renderedVersion) {
+      map.innerHTML = buildTerritoryMapMarkup(null);
+    }
   }
 }
 
@@ -2966,6 +3259,12 @@ function hydrateAdminPanel({ onProfilePatched, onToast }) {
       void renderAdminRandomBoxSection({ onProfilePatched, onToast });
     }
   }
+  if (activeAdminSection === "territory-rules") {
+    void renderAdminTerritorySettings({ onProfilePatched, onToast });
+  }
+  if (activeAdminSection === "ranking-manage") {
+    attachAdminRankingManageEvents({ onToast });
+  }
 
   document.querySelectorAll("[data-admin-section]").forEach((button) => {
     button.classList.toggle("active", button.dataset.adminSection === activeAdminSection);
@@ -3024,13 +3323,17 @@ function renderAdminSection(body) {
             </div>
             <label>
               <span>권한 변경</span>
-              <select name="setRole">
-                <option value="">변경 안 함</option>
-                <option value="user">user</option>
-                <option value="moderator">moderator</option>
-                <option value="gm">gm</option>
-                <option value="admin">admin</option>
-              </select>
+              ${buildAdminOptionSelector({
+                inputName: "setRole",
+                selectorId: "admin-user-role-select",
+                selectedValue: "",
+                placeholder: "변경 안 함",
+                options: [
+                  { value: "", label: "변경 안 함", description: "현재 권한 유지" },
+                  { value: "user", label: "user", description: "일반 회원" },
+                  { value: "admin", label: "admin", description: "최고 권한" },
+                ],
+              })}
             </label>
             <button type="submit" class="primary-button">적용</button>
           </form>
@@ -3053,6 +3356,15 @@ function renderAdminSection(body) {
                 <tr><td colspan="4" class="table-empty">로그를 불러오는 중입니다.</td></tr>
               </tbody>
             </table>
+          </div>
+        </article>
+      </div>
+    `,
+    "territory-rules": `
+      <div class="admin-section-grid">
+        <article class="content-card full">
+          <div id="admin-territory-settings-body" class="stack-form compact-form">
+            <p class="muted">영토 운영 설정을 불러오는 중입니다.</p>
           </div>
         </article>
       </div>
@@ -3110,6 +3422,23 @@ function renderAdminSection(body) {
             <label><span>삭제 대상 캐릭터명</span><input type="text" name="characterName" placeholder="캐릭터명" required /></label>
             <button type="submit" class="ghost-button danger-button">계정 삭제</button>
           </form>
+        </article>
+      </div>
+    `,
+    "ranking-manage": `
+      <div class="admin-section-grid">
+        <article class="content-card">
+          <h3>날짜별 랭킹 박제</h3>
+          <p class="muted">해당 날짜 23:59 기준 랭킹을 영구 저장합니다. 이후 그 날짜를 조회하면 박제된 데이터를 표시합니다.</p>
+          <form id="ranking-snapshot-form" class="stack-form compact-form">
+            <label><span>박제할 날짜</span><input type="date" name="dateKey" required /></label>
+            <button type="submit" class="primary-button">랭킹 박제</button>
+          </form>
+        </article>
+        <article class="content-card">
+          <h3>박제 데이터 초기화</h3>
+          <p class="muted">오늘 이전 날짜의 랭킹 박제 데이터를 전부 삭제합니다.</p>
+          <button type="button" id="clear-past-matches-button" class="ghost-button danger-button">박제 데이터 삭제</button>
         </article>
       </div>
     `,
@@ -3210,7 +3539,13 @@ function renderAdminItemSection() {
         </div>
         <label class="hidden" data-category-edit-row>
           <span>카테고리 수정</span>
-          <select name="categoryOverride">${buildCategoryOverrideOptions()}</select>
+          ${buildAdminOptionSelector({
+            inputName: "categoryOverride",
+            selectorId: "admin-item-create-category-override",
+            selectedValue: "기타 아이템",
+            placeholder: "카테고리를 선택하세요",
+            options: buildCategoryOverrideOptions(),
+          })}
         </label>
         <label><span>설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
         <label class="hidden" data-food-reward-row>
@@ -3258,7 +3593,13 @@ function renderAdminItemSection() {
         </div>
         <label class="hidden" data-category-edit-row>
           <span>카테고리 수정</span>
-          <select name="categoryOverride">${buildCategoryOverrideOptions()}</select>
+          ${buildAdminOptionSelector({
+            inputName: "categoryOverride",
+            selectorId: "admin-item-edit-category-override",
+            selectedValue: "기타 아이템",
+            placeholder: "카테고리를 선택하세요",
+            options: buildCategoryOverrideOptions(),
+          })}
         </label>
         <label><span>설명</span><textarea name="description" rows="4" placeholder="아이템 설명"></textarea></label>
         <label class="hidden" data-food-reward-row>
@@ -3419,6 +3760,486 @@ async function renderAdminRandomBoxSection({ onProfilePatched, onToast }) {
   });
 }
 
+function getAdminTerritoryFactionOptions(selectedValue = "") {
+  return PROFILE_FACTION_OPTIONS
+    .map((faction) => `<option value="${escapeHtml(faction)}"${selectedValue === faction ? " selected" : ""}>${escapeHtml(faction)}</option>`)
+    .join("");
+}
+
+function buildAdminTerritoryStatusPills(board) {
+  const phase = String(board?.currentPhase || board?.phase || "regular").trim();
+  const sourceTotals = phase === "war"
+    ? board?.territory?.shareTotals || {}
+    : board?.currentFactionScores?.rawTotals || {};
+  const unit = phase === "war" ? "percent" : "points";
+  const pills = PROFILE_FACTION_OPTIONS
+    .map((faction) => `<span class="live-pill">${escapeHtml(faction)} ${escapeHtml(formatRankingScoreValue(sourceTotals?.[faction] || 0, unit))}</span>`)
+    .join("");
+  const hold = board?.territory?.regularClaimHold;
+  if (phase === "regular" && hold?.availableCells === 1 && Array.isArray(hold.factions) && hold.factions.length > 1) {
+    return `${pills}<span class="live-pill">마지막 1칸 보류 ${escapeHtml(hold.factions.join(", "))} ${escapeHtml(formatRankingScoreValue(hold.points || 0, "points"))}</span>`;
+  }
+  return pills;
+}
+
+function buildAdminTerritoryLiveBar(board) {
+  const phase = String(board?.currentPhase || board?.phase || "regular").trim();
+  if (phase === "war") {
+    return buildFactionScoreBarMarkup({
+      rawTotals: board?.territory?.shareTotals || {},
+      barTotals: board?.territory?.shareTotals || {},
+      displayUnit: "percent",
+      barUnit: "percent",
+    });
+  }
+  return buildFactionScoreBarMarkup(board?.currentFactionScores || board?.factionScores || null);
+}
+
+function buildAdminRegularCellSelectionMarkup(board) {
+  const cells = Array.isArray(board?.territory?.cells) ? [...board.territory.cells] : [];
+  const sortedCells = cells
+    .map((cell) => ({
+      id: String(cell.id || "").trim(),
+      number: Number(String(cell.id || "").replace(/^cell-/, "")),
+      ownerFaction: String(cell.ownerFaction || "").trim(),
+    }))
+    .filter((cell) => Number.isFinite(cell.number) && cell.number >= 1 && cell.number <= 100)
+    .sort((left, right) => left.number - right.number);
+  return `
+    <div class="admin-territory-cell-picker-head">
+      <div class="admin-territory-form-head">
+        <strong>땅 선택</strong>
+      </div>
+      <button type="button" class="ghost-button compact-button" data-admin-cell-selection-clear>선택 해제</button>
+    </div>
+    <input type="hidden" name="cellNumbers" value="" />
+    <div class="admin-territory-cell-picker-grid" data-admin-cell-picker>
+      ${sortedCells.map((cell) => `
+        <button
+          type="button"
+          class="admin-territory-cell-button ${escapeHtml(getTerritoryFactionClass(cell.ownerFaction))}"
+          data-admin-cell-number="${cell.number}"
+          data-tooltip="${escapeHtml(`${cell.number}번 ${cell.ownerFaction || "빈 땅"}`)}"
+          aria-label="${escapeHtml(`${cell.number}번 ${cell.ownerFaction || "빈 땅"}`)}"
+        >
+          <span class="admin-territory-cell-number${cell.number >= 100 ? " is-three-digit" : ""}">${cell.number}</span>
+        </button>
+      `).join("")}
+    </div>
+    <p class="muted admin-territory-cell-selection-summary" data-admin-cell-selection-summary>선택된 칸이 없습니다.</p>
+  `;
+}
+
+function buildAdminTerritorySettingsMarkup({ config, board }) {
+  const phase = String(board?.currentPhase || board?.phase || "regular").trim();
+  const selectedDate = String(board?.selectedDate || "").trim();
+  const selectedDateLabel = String(board?.selectedDateLabel || selectedDate || "-").trim();
+  const currentRegularPeriodKey = String(board?.currentRegularPeriodKey || selectedDate || "").trim();
+  const settings = config?.settings || {};
+  const regular4p = settings?.regularPayouts?.["ranked-4p-hanchan"] || [30, 10, -10, -30];
+  const regular3p = settings?.regularPayouts?.["ranked-3p-hanchan"] || [15, 0, -15];
+  const war4p = settings?.warPayouts?.["ranked-4p-hanchan"] || { entryPercent: 0.2, prizePercents: [0.45, 0.25, 0.1, 0] };
+  const war3p = settings?.warPayouts?.["ranked-3p-hanchan"] || { entryPercent: 0.1, prizePercents: [0.2, 0.1, 0] };
+  const factionSummary = buildAdminTerritoryStatusPills(board);
+
+  return `
+    <div class="admin-territory-grid">
+      <article class="content-card admin-territory-status-card">
+        <div class="admin-territory-status-head">
+          <div>
+            <p class="eyebrow">TERRITORY STATUS</p>
+            <h3>현재 상태</h3>
+          </div>
+          <span class="admin-territory-status-phase ${phase === "war" ? "is-war" : "is-regular"}">${phase === "war" ? "쟁탈전" : "정규전"}</span>
+        </div>
+        <p class="muted">현재 랭킹 페이지: ${escapeHtml(selectedDateLabel || "-")}</p>
+        <div class="admin-territory-live-bar">${buildAdminTerritoryLiveBar(board)}</div>
+        <div class="live-match-summary">${factionSummary}</div>
+        <form id="admin-territory-reset-form" class="admin-territory-reset-form" autocomplete="off">
+          <button type="submit" class="danger-button">지도 초기화 및 정규전 복귀</button>
+        </form>
+      </article>
+      <article class="content-card ${phase === "regular" ? "" : "hidden"}">
+        <h3>정규전 조정</h3>
+        <div class="admin-territory-actions">
+        <form id="admin-regular-points-form" class="stack-form compact-form admin-territory-inline-form" autocomplete="off">
+          <div class="admin-territory-form-head">
+            <strong>진영 점수 조정</strong>
+            <p>현재 진행 중인 정규전 페이지에 즉시 반영됩니다.</p>
+          </div>
+          <input type="hidden" name="periodKey" value="${escapeHtml(currentRegularPeriodKey)}" />
+          <label><span>대상 진영</span>${buildAdminFactionSelector({ inputName: "factionName", selectorId: "admin-regular-faction-select", selectedValue: "매화" })}</label>
+          <label><span>추가 점수</span><input type="number" name="delta" value="0" step="1" /></label>
+          <label><span>메모</span><input type="text" name="note" placeholder="선택 사항" /></label>
+          <button type="submit" class="primary-button">점수 적용</button>
+        </form>
+        <form id="admin-regular-cell-form" class="stack-form compact-form admin-territory-inline-form" autocomplete="off">
+          ${buildAdminRegularCellSelectionMarkup(board)}
+          <label><span>변경 대상 진영</span>${buildAdminFactionSelector({ inputName: "targetFaction", selectorId: "admin-regular-target-faction-select", selectedValue: EMPTY_FACTION_SELECTOR_VALUE, includeEmptyOption: true, emptyOptionLabel: "빈 땅" })}</label>
+          <button type="submit" class="ghost-button">선택한 땅 소유권 변경</button>
+        </form>
+        </div>
+      </article>
+      <article class="content-card admin-territory-war-card ${phase === "war" ? "" : "hidden"}">
+        <h3>쟁탈전 조정</h3>
+        <div class="admin-territory-actions">
+          <form id="admin-war-transfer-form" class="stack-form compact-form admin-territory-inline-form admin-territory-war-transfer-form" autocomplete="off">
+            <div class="admin-territory-form-head">
+              <strong>진영 간 양도</strong>
+              <p>한 진영의 비율을 다른 진영으로 넘깁니다.</p>
+            </div>
+            <div class="admin-territory-war-transfer-grid">
+              <label><span>양도 진영</span>${buildAdminFactionSelector({ inputName: "sourceFaction", selectorId: "admin-war-source-faction-select", selectedValue: "매화" })}</label>
+              <label><span>대상 진영</span>${buildAdminFactionSelector({ inputName: "targetFaction", selectorId: "admin-war-target-faction-select", selectedValue: "난초" })}</label>
+              <label><span>양도 비율</span><input type="number" name="delta" value="0" step="0.01" /></label>
+              <label><span>메모</span><input type="text" name="note" placeholder="선택 사항" /></label>
+            </div>
+            <button type="submit" class="ghost-button">비율 양도</button>
+          </form>
+        </div>
+      </article>
+      <article class="content-card full">
+        <h3>정산 규칙</h3>
+        <form id="admin-territory-rules-form" class="stack-form compact-form admin-territory-rules-form" autocomplete="off">
+          <div class="admin-territory-rule-block">
+            <strong>정규전 땅 규칙</strong>
+            <label><span>점령 기준 점수</span><input type="number" name="regularCaptureThreshold" value="${Number(settings?.regularCaptureThreshold || 100)}" min="1" step="1" /></label>
+            <label><span>평일 점령 배수</span><input type="number" name="weekdayCaptureMultiplier" value="${Number(settings?.weekdayCaptureMultiplier || 1)}" min="1" step="1" /></label>
+            <label><span>주말 점령 배수</span><input type="number" name="weekendCaptureMultiplier" value="${Number(settings?.weekendCaptureMultiplier || 2)}" min="1" step="1" /></label>
+          </div>
+          <div class="admin-territory-rule-block">
+            <strong>정규전 4인 반장전</strong>
+            <label><span>1위</span><input type="number" name="regular4p1" value="${Number(regular4p[0] || 0)}" step="0.01" /></label>
+            <label><span>2위</span><input type="number" name="regular4p2" value="${Number(regular4p[1] || 0)}" step="0.01" /></label>
+            <label><span>3위</span><input type="number" name="regular4p3" value="${Number(regular4p[2] || 0)}" step="0.01" /></label>
+            <label><span>4위</span><input type="number" name="regular4p4" value="${Number(regular4p[3] || 0)}" step="0.01" /></label>
+          </div>
+          <div class="admin-territory-rule-block">
+            <strong>정규전 3인 반장전</strong>
+            <label><span>1위</span><input type="number" name="regular3p1" value="${Number(regular3p[0] || 0)}" step="0.01" /></label>
+            <label><span>2위</span><input type="number" name="regular3p2" value="${Number(regular3p[1] || 0)}" step="0.01" /></label>
+            <label><span>3위</span><input type="number" name="regular3p3" value="${Number(regular3p[2] || 0)}" step="0.01" /></label>
+          </div>
+          <div class="admin-territory-rule-block">
+            <strong>쟁탈전 4인 반장전</strong>
+            <label><span>참가비</span><input type="number" name="war4pEntry" value="${Number(war4p.entryPercent || 0)}" step="0.01" /></label>
+            <label><span>1위</span><input type="number" name="war4p1" value="${Number(war4p.prizePercents?.[0] || 0)}" step="0.01" /></label>
+            <label><span>2위</span><input type="number" name="war4p2" value="${Number(war4p.prizePercents?.[1] || 0)}" step="0.01" /></label>
+            <label><span>3위</span><input type="number" name="war4p3" value="${Number(war4p.prizePercents?.[2] || 0)}" step="0.01" /></label>
+            <label><span>4위</span><input type="number" name="war4p4" value="${Number(war4p.prizePercents?.[3] || 0)}" step="0.01" /></label>
+          </div>
+          <div class="admin-territory-rule-block">
+            <strong>쟁탈전 3인 반장전</strong>
+            <label><span>참가비</span><input type="number" name="war3pEntry" value="${Number(war3p.entryPercent || 0)}" step="0.01" /></label>
+            <label><span>1위</span><input type="number" name="war3p1" value="${Number(war3p.prizePercents?.[0] || 0)}" step="0.01" /></label>
+            <label><span>2위</span><input type="number" name="war3p2" value="${Number(war3p.prizePercents?.[1] || 0)}" step="0.01" /></label>
+            <label><span>3위</span><input type="number" name="war3p3" value="${Number(war3p.prizePercents?.[2] || 0)}" step="0.01" /></label>
+          </div>
+          <button type="submit" class="primary-button">정산 규칙 저장</button>
+        </form>
+      </article>
+    </div>
+  `;
+}
+
+async function renderAdminTerritorySettings({ onProfilePatched, onToast }) {
+  const body = document.querySelector("#admin-territory-settings-body");
+  if (!body) return;
+  try {
+    const [settingsResult, board] = await Promise.all([
+      getRankingTerritoryAdminSettings(),
+      getCachedRankingBoard(true, ""),
+    ]);
+    latestAdminTerritorySettings = settingsResult?.config || null;
+    body.innerHTML = buildAdminTerritorySettingsMarkup({
+      config: latestAdminTerritorySettings,
+      board,
+    });
+    initializeAdminFactionSelectors(body);
+    initializeAdminRegularCellPicker(body);
+    attachAdminTerritoryEvents({ onProfilePatched, onToast });
+  } catch (error) {
+    body.innerHTML = `<p class="muted">${escapeHtml(error.message || "영토 설정을 불러오지 못했습니다.")}</p>`;
+    onToast(error.message || "영토 설정을 불러오지 못했습니다.", true);
+  }
+}
+
+function initializeAdminRegularCellPicker(root = document) {
+  const form = root.querySelector("#admin-regular-cell-form");
+  if (!(form instanceof HTMLElement) || form.dataset.cellPickerBound === "true") return;
+  form.dataset.cellPickerBound = "true";
+  const hiddenInput = form.querySelector('input[name="cellNumbers"]');
+  const summary = form.querySelector("[data-admin-cell-selection-summary]");
+  const clearButton = form.querySelector("[data-admin-cell-selection-clear]");
+  const cellButtons = Array.from(form.querySelectorAll("[data-admin-cell-number]"));
+  if (!(hiddenInput instanceof HTMLInputElement) || !(summary instanceof HTMLElement) || !cellButtons.length) {
+    return;
+  }
+
+  const selectedCells = new Set();
+  let isDragging = false;
+  let dragSelectMode = true;
+
+  const syncSelection = () => {
+    const numbers = [...selectedCells].sort((left, right) => left - right);
+    hiddenInput.value = numbers.join(",");
+    summary.textContent = numbers.length
+      ? `${numbers.length}칸 선택됨: ${numbers.join(", ")}`
+      : "선택된 칸이 없습니다.";
+    cellButtons.forEach((button) => {
+      const cellNumber = Number(button.dataset.adminCellNumber || 0);
+      button.classList.toggle("is-selected", selectedCells.has(cellNumber));
+    });
+  };
+
+  const applySelection = (button) => {
+    const cellNumber = Number(button.dataset.adminCellNumber || 0);
+    if (!cellNumber) return;
+    if (dragSelectMode) {
+      selectedCells.add(cellNumber);
+    } else {
+      selectedCells.delete(cellNumber);
+    }
+    syncSelection();
+  };
+
+  cellButtons.forEach((button) => {
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      const cellNumber = Number(button.dataset.adminCellNumber || 0);
+      if (!cellNumber) return;
+      isDragging = true;
+      form.dataset.dragging = "true";
+      dragSelectMode = !selectedCells.has(cellNumber);
+      applySelection(button);
+    });
+    button.addEventListener("mouseenter", () => {
+      isDragging = form.dataset.dragging === "true";
+      if (!isDragging) return;
+      applySelection(button);
+    });
+  });
+
+  if (!document.body.dataset.adminCellPickerMouseupBound) {
+    document.body.dataset.adminCellPickerMouseupBound = "true";
+    document.addEventListener("mouseup", () => {
+      document.querySelectorAll("#admin-regular-cell-form").forEach((activeForm) => {
+        activeForm.dataset.dragging = "false";
+      });
+    });
+  }
+
+  clearButton?.addEventListener("click", () => {
+    selectedCells.clear();
+    syncSelection();
+  });
+
+  syncSelection();
+}
+
+function attachAdminRankingManageEvents({ onToast }) {
+  const snapshotForm = document.querySelector("#ranking-snapshot-form");
+  const clearButton = document.querySelector("#clear-past-matches-button");
+
+  if (snapshotForm) {
+    snapshotForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const dateKey = String(snapshotForm.querySelector('[name="dateKey"]')?.value || "").trim();
+      if (!dateKey) return;
+      const submitButton = snapshotForm.querySelector("button[type=submit]");
+      submitButton.disabled = true;
+      try {
+        await saveRankingSnapshot(dateKey);
+        onToast(`${dateKey} 랭킹 박제 완료`);
+      } catch (err) {
+        onToast(`박제 실패: ${err.message}`, true);
+      } finally {
+        submitButton.disabled = false;
+      }
+    };
+  }
+
+  if (clearButton) {
+    clearButton.onclick = async () => {
+      if (!confirm("오늘 이전 랭킹 박제 데이터를 전부 삭제합니다. 계속하시겠습니까?")) return;
+      clearButton.disabled = true;
+      try {
+        const result = await clearPastRankingSnapshots();
+        onToast(`삭제 완료 (${result.deletedCount}건)`);
+      } catch (err) {
+        onToast(`삭제 실패: ${err.message}`, true);
+      } finally {
+        clearButton.disabled = false;
+      }
+    };
+  }
+}
+
+function attachAdminTerritoryEvents({ onProfilePatched, onToast }) {
+  if (activeAdminSection !== "territory-rules") return;
+
+  const regularPointsForm = document.querySelector("#admin-regular-points-form");
+  const regularCellForm = document.querySelector("#admin-regular-cell-form");
+  const warTransferForm = document.querySelector("#admin-war-transfer-form");
+  const rulesForm = document.querySelector("#admin-territory-rules-form");
+  const resetForm = document.querySelector("#admin-territory-reset-form");
+
+  if (regularPointsForm && regularPointsForm.dataset.bound !== "true") {
+    regularPointsForm.dataset.bound = "true";
+    regularPointsForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = Object.fromEntries(new FormData(regularPointsForm).entries());
+      try {
+        await withPendingToast(onToast, () => updateRankingTerritoryAdminSettings("grant-regular-points", {
+          periodKey: String(payload.periodKey || "").trim(),
+          factionName: String(payload.factionName || "").trim(),
+          delta: Number(payload.delta || 0),
+          note: String(payload.note || "").trim(),
+        }));
+        invalidateQuickProfileCaches();
+        await renderAdminTerritorySettings({ onProfilePatched, onToast });
+        await hydrateTerritoryPanel();
+        await hydrateRankingPanel();
+        await hydrateDashboardFactionBar();
+        onToast("정규전 진영 점수를 조정했습니다.");
+      } catch (error) {
+        onToast(error.message, true);
+      }
+    });
+  }
+
+  if (regularCellForm && regularCellForm.dataset.bound !== "true") {
+    regularCellForm.dataset.bound = "true";
+    regularCellForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = Object.fromEntries(new FormData(regularCellForm).entries());
+      if (!String(payload.cellNumbers || "").trim()) {
+        onToast("먼저 땅 번호를 하나 이상 선택해 주세요.", true);
+        return;
+      }
+      try {
+        await withPendingToast(onToast, () => updateRankingTerritoryAdminSettings("transfer-regular-cells", {
+          cellNumbers: String(payload.cellNumbers || "").trim(),
+          targetFaction: String(payload.targetFaction || "").trim() === EMPTY_FACTION_SELECTOR_VALUE
+            ? ""
+            : String(payload.targetFaction || "").trim(),
+        }));
+        invalidateQuickProfileCaches();
+        await renderAdminTerritorySettings({ onProfilePatched, onToast });
+        await hydrateTerritoryPanel();
+        await hydrateDashboardFactionBar();
+        onToast("정규전 땅 소유권을 변경했습니다.");
+      } catch (error) {
+        onToast(error.message, true);
+      }
+    });
+  }
+
+  if (warTransferForm && warTransferForm.dataset.bound !== "true") {
+    warTransferForm.dataset.bound = "true";
+    warTransferForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = Object.fromEntries(new FormData(warTransferForm).entries());
+      const sourceSelector = warTransferForm.querySelector("#admin-war-source-faction-select");
+      const targetSelector = warTransferForm.querySelector("#admin-war-target-faction-select");
+      const sourceFaction = String(
+        payload.sourceFaction
+        || sourceSelector?.dataset.selectedFactionName
+        || sourceSelector?.querySelector("[data-option-selector-input]")?.value
+        || ""
+      ).trim();
+      const targetFaction = String(
+        payload.targetFaction
+        || targetSelector?.dataset.selectedFactionName
+        || targetSelector?.querySelector("[data-option-selector-input]")?.value
+        || ""
+      ).trim();
+      const delta = Number(payload.delta || 0);
+      try {
+        const requestPayload = {
+          sourceFaction,
+          targetFaction,
+          delta,
+          note: String(payload.note || "").trim(),
+          force: true,
+        };
+        await withPendingToast(onToast, () => updateRankingTerritoryAdminSettings("transfer-war-share", requestPayload));
+        invalidateQuickProfileCaches();
+        await renderAdminTerritorySettings({ onProfilePatched, onToast });
+        await hydrateTerritoryPanel();
+        await hydrateDashboardFactionBar();
+        onToast("쟁탈전 진영 비율을 양도했습니다.");
+      } catch (error) {
+        onToast(error.message, true);
+      }
+    });
+  }
+
+  if (rulesForm && rulesForm.dataset.bound !== "true") {
+    rulesForm.dataset.bound = "true";
+    rulesForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const payload = Object.fromEntries(new FormData(rulesForm).entries());
+      try {
+        await withPendingToast(onToast, () => updateRankingTerritoryAdminSettings("update-rules", {
+          regularCaptureThreshold: Number(payload.regularCaptureThreshold || 100),
+          weekdayCaptureMultiplier: Number(payload.weekdayCaptureMultiplier || 1),
+          weekendCaptureMultiplier: Number(payload.weekendCaptureMultiplier || 2),
+          regularPayouts: {
+            "ranked-4p-hanchan": [payload.regular4p1, payload.regular4p2, payload.regular4p3, payload.regular4p4].map(Number),
+            "ranked-3p-hanchan": [payload.regular3p1, payload.regular3p2, payload.regular3p3].map(Number),
+          },
+          warPayouts: {
+            "ranked-4p-hanchan": {
+              entryPercent: Number(payload.war4pEntry || 0),
+              prizePercents: [payload.war4p1, payload.war4p2, payload.war4p3, payload.war4p4].map(Number),
+            },
+            "ranked-3p-hanchan": {
+              entryPercent: Number(payload.war3pEntry || 0),
+              prizePercents: [payload.war3p1, payload.war3p2, payload.war3p3].map(Number),
+            },
+          },
+        }));
+        invalidateQuickProfileCaches();
+        await renderAdminTerritorySettings({ onProfilePatched, onToast });
+        await hydrateRankingPanel();
+        await hydrateTerritoryPanel();
+        await hydrateDashboardFactionBar();
+        onToast("영토 정산 규칙을 저장했습니다.");
+      } catch (error) {
+        onToast(error.message, true);
+      }
+    });
+  }
+
+  if (resetForm && resetForm.dataset.bound !== "true") {
+    resetForm.dataset.bound = "true";
+    resetForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const confirmed = await openActionConfirmModal({
+        eyebrowText: "영토 초기화",
+        titleText: "지도 초기화 및 정규전 복귀",
+        bodyText: "영토 상태, 수동 땅 배정, 정규전 추가 점수를 전부 초기화하고 정규전으로 되돌립니다.",
+        confirmText: "초기화",
+        cancelText: "취소",
+      });
+      if (!confirmed) return;
+      try {
+        await withPendingToast(onToast, () => updateRankingTerritoryAdminSettings("reset-territory-progress", {}));
+        invalidateQuickProfileCaches();
+        activeRankingDate = "";
+        await renderAdminTerritorySettings({ onProfilePatched, onToast });
+        await hydrateRankingPanel();
+        await hydrateTerritoryPanel();
+        await hydrateDashboardFactionBar();
+        onToast("지도와 영토 진행 상태를 초기화했습니다.");
+      } catch (error) {
+        onToast(error.message, true);
+      }
+    });
+  }
+}
+
 function attachAdminEvents({ onProfilePatched, onToast }) {
   const manageForm = document.querySelector("#admin-manage-form");
   const itemForm = document.querySelector("#admin-item-form");
@@ -3429,6 +4250,7 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
 
   initializeItemSpritePickers();
   initializeAdminItemSelectors();
+  initializeAdminFactionSelectors();
   void ensureAdminMahjongProfileItems(onToast);
 
   document.querySelectorAll("[data-admin-item-section]").forEach((button) => {
@@ -3446,6 +4268,8 @@ function attachAdminEvents({ onProfilePatched, onToast }) {
   if (activeAdminItemSection === "random-box") {
     void renderAdminRandomBoxSection({ onProfilePatched, onToast });
   }
+
+  attachAdminTerritoryEvents({ onProfilePatched, onToast });
 
   if (manageForm) {
     const targetInput = manageForm.querySelector('input[name="targetCharacterName"]');
@@ -3854,15 +4678,20 @@ async function requestInventoryItemExtraData(item, profile = null) {
           <span>${escapeHtml(field.label || field.name || "입력값")}</span>
           ${
             field.type === "select"
-              ? `<select name="${escapeHtml(field.name || "")}" ${field.required === false ? "" : "required"}>
-                  <option value="">선택해 주세요</option>
-                  ${(Array.isArray(field.options) ? field.options : [])
-                    .map(
-                      (option) =>
-                        `<option value="${escapeHtml(option.value || option.label || "")}">${escapeHtml(option.label || option.value || "")}</option>`
-                    )
-                    .join("")}
-                </select>`
+              ? buildAdminOptionSelector({
+                  inputName: field.name || "",
+                  selectorId: `inventory-prompt-select-${field.name || "field"}`,
+                  selectedValue: "",
+                  placeholder: "선택해 주세요",
+                  options: [
+                    { value: "", label: "선택해 주세요", description: field.required === false ? "선택 안 함" : "필수 입력" },
+                    ...(Array.isArray(field.options) ? field.options : []).map((option) => ({
+                      value: option.value || option.label || "",
+                      label: option.label || option.value || "",
+                      description: field.label || field.name || "선택 항목",
+                    })),
+                  ],
+                })
               : `<input
                   type="${escapeHtml(field.type || "text")}"
                   name="${escapeHtml(field.name || "")}"
@@ -3874,6 +4703,7 @@ async function requestInventoryItemExtraData(item, profile = null) {
       `
     )
     .join("");
+  initializeAdminOptionSelectors(form);
 
   modal.classList.remove("hidden");
 
@@ -3993,7 +4823,8 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
   const addInput = modal.querySelector('input[name="newExtraNickname"]');
   const addConfirm = modal.querySelector("#member-profile-add-confirm");
   const friendCodeInput = modal.querySelector('input[name="friendCode"]');
-  const factionSelect = modal.querySelector('select[name="factionName"]');
+  const factionSelector = modal.querySelector("#member-profile-faction-select");
+  const factionInput = modal.querySelector('input[name="factionName"]');
   const currentPasswordInput = modal.querySelector('input[name="currentPassword"]');
   const nextPasswordInput = modal.querySelector('input[name="nextPassword"]');
   const nextPasswordConfirmInput = modal.querySelector('input[name="nextPasswordConfirm"]');
@@ -4008,7 +4839,8 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
     !addInput ||
     !addConfirm ||
     !friendCodeInput ||
-    !factionSelect ||
+    !factionSelector ||
+    !factionInput ||
     !currentPasswordInput ||
     !nextPasswordInput ||
     !nextPasswordConfirmInput ||
@@ -4022,7 +4854,7 @@ async function openMemberProfileEditModal({ profile, onProfilePatched, onToast }
   form.reset();
   nicknameDisplay.value = String(profile.nickname || "");
   friendCodeInput.value = String(profile.friendCode || "");
-  factionSelect.value = String(profile.factionName || "");
+  syncAdminFactionSelector(factionSelector, String(profile.factionName || ""));
   addWrap.classList.add("hidden");
   addInput.value = "";
   currentPasswordInput.value = "";
@@ -4157,13 +4989,12 @@ function ensureMemberProfileEditModal() {
         </label>
         <label>
           <span>파벌 이름</span>
-          <select name="factionName">
-            <option value="">파벌을 선택하세요</option>
-            <option value="매화">매화</option>
-            <option value="난초">난초</option>
-            <option value="국화">국화</option>
-            <option value="대나무">대나무</option>
-          </select>
+          ${buildAdminFactionSelector({
+            inputName: "factionName",
+            selectorId: "member-profile-faction-select",
+            selectedValue: "",
+            placeholder: "파벌을 선택하세요",
+          })}
         </label>
         <label>
           <span>현재 비밀번호</span>
@@ -4186,6 +5017,7 @@ function ensureMemberProfileEditModal() {
   `;
 
   document.body.append(modal);
+  initializeAdminFactionSelectors(modal);
   return modal;
 }
 
@@ -4215,7 +5047,7 @@ function normalizeProfileDecorations(items) {
     .filter(Boolean);
 }
 
-function renderProfileDecorationVisual(item, isOwnProfile) {
+function renderProfileDecorationVisual(item, isOwnProfile, { eager = false } = {}) {
   const sprite = getItemSprite(item?.spriteKey);
   if (!sprite) return "";
   const safeLeft = Math.round(Math.min(1, Math.max(0, Number(item.x) || 0.5)) * 1000) / 10;
@@ -4245,7 +5077,7 @@ function renderProfileDecorationVisual(item, isOwnProfile) {
             </div>`
           : ""
       }
-      <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${label}" class="profile-decoration-image" loading="lazy" style="${escapeHtml(imageStyle)}" />
+      <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${label}" class="profile-decoration-image"${eager ? ' loading="eager" fetchpriority="high" decoding="async"' : ' loading="lazy"'}${buildItemSpriteFallbackAttributes(sprite)} style="${escapeHtml(imageStyle)}" />
     </div>
   `;
 }
@@ -5303,10 +6135,10 @@ function renderInventoryItemVisual(item, options = {}) {
   return renderItemVisual(normalizeSystemInventoryItemForDisplay(item), options);
 }
 
-function renderProfileItemVisual(item) {
+function renderProfileItemVisual(item, { eager = false } = {}) {
   const sprite = getItemSprite(item?.spriteKey);
   if (sprite) {
-    return `<img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="profile-item-icon profile-item-icon-image" loading="lazy"${buildItemImageStyleAttribute(item)} />`;
+    return `<img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(item?.name || sprite.label)}" class="profile-item-icon profile-item-icon-image"${eager ? ' loading="eager" fetchpriority="high" decoding="async"' : ' loading="lazy"'}${buildItemSpriteFallbackAttributes(sprite)}${buildItemImageStyleAttribute(item)} />`;
   }
   return `<span class="profile-item-icon">${escapeHtml(item?.icon || sprite?.fallbackIcon || "🎁")}</span>`;
 }
@@ -5322,6 +6154,88 @@ function buildAdminItemSelector({ inputName, selectorId, placeholder = "아이�
         <span class="item-selector-arrow" aria-hidden="true">▾</span>
       </button>
       <div class="item-selector-menu hidden" data-item-selector-menu role="listbox"></div>
+    </div>
+  `;
+}
+
+function buildAdminFactionSelector({
+  inputName,
+  selectorId,
+  selectedValue = "",
+  placeholder = "진영을 선택하세요",
+  includeEmptyOption = false,
+  emptyOptionLabel = "빈 땅",
+}) {
+  const selectorOptions = [
+    ...PROFILE_FACTION_OPTIONS.map((factionName) => ({
+      value: factionName,
+      label: factionName,
+      description: "진영",
+    })),
+    ...(includeEmptyOption
+      ? [{ value: EMPTY_FACTION_SELECTOR_VALUE, label: emptyOptionLabel, description: "점령 해제" }]
+      : []),
+  ];
+  return buildAdminOptionSelector({
+    inputName,
+    selectorId,
+    selectedValue,
+    placeholder,
+    options: selectorOptions,
+    variant: "faction",
+    rootAttributes: `data-admin-faction-selector`,
+  });
+}
+
+function buildAdminOptionSelector({
+  inputName,
+  selectorId,
+  selectedValue = "",
+  placeholder = "선택하세요",
+  options = [],
+  variant = "",
+  rootAttributes = "",
+}) {
+  const normalizedValue = String(selectedValue || "").trim();
+  const optionList = Array.isArray(options)
+    ? options.map((option) => ({
+        value: String(option?.value ?? "").trim(),
+        label: String(option?.label ?? option?.value ?? "").trim(),
+        description: String(option?.description ?? "").trim(),
+      }))
+    : [];
+  const selectedOption = optionList.find((option) => option.value === normalizedValue) || null;
+  const variantClass = variant ? ` ${escapeHtml(`${variant}-selector`)}` : "";
+  const variantAttr = variant ? ` data-option-selector-variant="${escapeHtml(variant)}"` : "";
+  return `
+    <div class="item-selector option-selector${variantClass}" data-admin-option-selector ${rootAttributes} id="${escapeHtml(selectorId)}" data-placeholder="${escapeHtml(placeholder)}" data-option-selector-input-name="${escapeHtml(inputName)}"${variantAttr}>
+      <input type="hidden" name="${escapeHtml(inputName)}" value="${escapeHtml(normalizedValue)}" data-option-selector-input />
+      <button type="button" class="item-selector-trigger" data-option-selector-trigger aria-expanded="false">
+        <span class="item-selector-value" data-option-selector-value>
+          ${selectedOption
+            ? `<span class="item-selector-selected-copy"><strong>${escapeHtml(selectedOption.label)}</strong>${selectedOption.description ? `<small>${escapeHtml(selectedOption.description)}</small>` : ""}</span>`
+            : `<span class="item-selector-label muted" data-option-selector-label>${escapeHtml(placeholder)}</span>`}
+        </span>
+        <span class="item-selector-arrow" aria-hidden="true">▾</span>
+      </button>
+      <div class="item-selector-menu hidden" data-option-selector-menu role="listbox">
+        ${optionList.map((option) => `
+          <button
+            type="button"
+            class="item-selector-option ${option.value === normalizedValue ? "active" : ""}"
+            data-option-selector-option="${escapeHtml(option.value)}"
+            data-option-selector-label="${escapeHtml(option.label)}"
+            data-option-selector-description="${escapeHtml(option.description)}"
+            role="option"
+            aria-selected="${option.value === normalizedValue ? "true" : "false"}"
+          >
+            <span class="item-selector-option-copy">
+              <strong>${escapeHtml(option.label)}</strong>
+              ${option.description ? `<small>${escapeHtml(option.description)}</small>` : ""}
+            </span>
+          </button>
+        `).join("")}
+      </div>
     </div>
   `;
 }
@@ -5345,6 +6259,214 @@ function buildAdminItemSelectorOption(item, isSelected) {
   `;
 }
 
+function getAdminItemSelectorSearchValue(selector) {
+  return String(selector?.dataset?.searchText || "").trim().toLowerCase();
+}
+
+function syncAdminOptionSelector(selector, selectedValue, { closeMenu = true } = {}) {
+  if (!(selector instanceof HTMLElement)) return;
+  const hiddenInput = selector.querySelector("[data-option-selector-input]");
+  const valueBox = selector.querySelector("[data-option-selector-value]");
+  const menu = selector.querySelector("[data-option-selector-menu]");
+  const trigger = selector.querySelector("[data-option-selector-trigger]");
+  if (!(hiddenInput instanceof HTMLInputElement) || !(valueBox instanceof HTMLElement) || !(menu instanceof HTMLElement) || !(trigger instanceof HTMLElement)) {
+    return;
+  }
+
+  const placeholder = selector.dataset.placeholder || "선택하세요";
+  const normalizedValue = String(selectedValue || "").trim();
+  const selectedOption = Array.from(menu.querySelectorAll("[data-option-selector-option]"))
+    .find((option) => String(option.dataset.optionSelectorOption || "").trim() === normalizedValue);
+
+  hiddenInput.value = selectedOption ? normalizedValue : "";
+  selector.dataset.selectedOptionValue = hiddenInput.value;
+  if (selectedOption) {
+    const label = String(selectedOption.dataset.optionSelectorLabel || hiddenInput.value).trim();
+    const description = String(selectedOption.dataset.optionSelectorDescription || "").trim();
+    valueBox.innerHTML = `<span class="item-selector-selected-copy"><strong>${escapeHtml(label)}</strong>${description ? `<small>${escapeHtml(description)}</small>` : ""}</span>`;
+  } else {
+    valueBox.innerHTML = `<span class="item-selector-label muted" data-option-selector-label>${escapeHtml(placeholder)}</span>`;
+  }
+
+  menu.querySelectorAll("[data-option-selector-option]").forEach((option) => {
+    const isSelected = String(option.dataset.optionSelectorOption || "").trim() === hiddenInput.value;
+    option.classList.toggle("active", isSelected);
+    option.setAttribute("aria-selected", isSelected ? "true" : "false");
+  });
+
+  if (closeMenu) {
+    menu.classList.add("hidden");
+    trigger.classList.remove("is-open");
+    trigger.setAttribute("aria-expanded", "false");
+    setAdminItemSelectorLayerState(selector, false);
+  } else {
+    menu.classList.remove("hidden");
+    trigger.classList.add("is-open");
+    trigger.setAttribute("aria-expanded", "true");
+    setAdminItemSelectorLayerState(selector, true);
+  }
+}
+
+function setAdminOptionSelectorOptions(selector, options, selectedValue = "") {
+  if (!(selector instanceof HTMLElement)) return;
+  const menu = selector.querySelector("[data-option-selector-menu]");
+  if (!(menu instanceof HTMLElement)) return;
+  const optionList = Array.isArray(options)
+    ? options.map((option) => ({
+        value: String(option?.value ?? "").trim(),
+        label: String(option?.label ?? option?.value ?? "").trim(),
+        description: String(option?.description ?? "").trim(),
+      }))
+    : [];
+  const normalizedValue = String(selectedValue || "").trim();
+  menu.innerHTML = optionList.map((option) => `
+    <button
+      type="button"
+      class="item-selector-option ${option.value === normalizedValue ? "active" : ""}"
+      data-option-selector-option="${escapeHtml(option.value)}"
+      data-option-selector-label="${escapeHtml(option.label)}"
+      data-option-selector-description="${escapeHtml(option.description)}"
+      role="option"
+      aria-selected="${option.value === normalizedValue ? "true" : "false"}"
+    >
+      <span class="item-selector-option-copy">
+        <strong>${escapeHtml(option.label)}</strong>
+        ${option.description ? `<small>${escapeHtml(option.description)}</small>` : ""}
+      </span>
+    </button>
+  `).join("");
+  syncAdminOptionSelector(selector, normalizedValue);
+}
+
+function syncAdminFactionSelector(selector, factionName, { closeMenu = true } = {}) {
+  const requestedValue = String(factionName || "").trim();
+  const normalizedValue = PROFILE_FACTION_OPTIONS.find((item) => item === requestedValue)
+    || (requestedValue === EMPTY_FACTION_SELECTOR_VALUE ? EMPTY_FACTION_SELECTOR_VALUE : "");
+  syncAdminOptionSelector(selector, normalizedValue, { closeMenu });
+  selector.dataset.selectedFactionName = normalizedValue;
+}
+
+function initializeAdminOptionSelectors(root = document) {
+  root.querySelectorAll("[data-admin-option-selector]").forEach((selector) => {
+    if (selector.dataset.optionBound === "true") return;
+    selector.dataset.optionBound = "true";
+
+    const trigger = selector.querySelector("[data-option-selector-trigger]");
+    const menu = selector.querySelector("[data-option-selector-menu]");
+    const hiddenInput = selector.querySelector("[data-option-selector-input]");
+    syncAdminOptionSelector(selector, hiddenInput?.value || "");
+
+    menu?.addEventListener("click", (event) => {
+      const option = event.target.closest("[data-option-selector-option]");
+      if (!option || !menu.contains(option)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      syncAdminOptionSelector(selector, option.dataset.optionSelectorOption || "");
+      if (hiddenInput instanceof HTMLInputElement) {
+        hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+
+    trigger?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const isOpen = !menu?.classList.contains("hidden");
+      document.querySelectorAll("[data-admin-option-selector]").forEach((otherSelector) => {
+        if (otherSelector === selector) return;
+        syncAdminOptionSelector(otherSelector, otherSelector.querySelector("[data-option-selector-input]")?.value || "");
+      });
+      if (isOpen) {
+        syncAdminOptionSelector(selector, hiddenInput?.value || "");
+      } else {
+        syncAdminOptionSelector(selector, hiddenInput?.value || "", { closeMenu: false });
+      }
+    });
+  });
+
+  if (!document.body.dataset.optionSelectorOutsideBound) {
+    document.body.dataset.optionSelectorOutsideBound = "true";
+    document.addEventListener("click", (event) => {
+      if (event.target.closest("[data-admin-option-selector]")) return;
+      document.querySelectorAll("[data-admin-option-selector]").forEach((selector) => {
+        syncAdminOptionSelector(selector, selector.querySelector("[data-option-selector-input]")?.value || "");
+      });
+    });
+  }
+}
+
+function initializeAdminFactionSelectors(root = document) {
+  initializeAdminOptionSelectors(root);
+  root.querySelectorAll("[data-admin-faction-selector]").forEach((selector) => {
+    const hiddenInput = selector.querySelector("[data-option-selector-input]");
+    syncAdminFactionSelector(selector, hiddenInput?.value || "");
+  });
+}
+
+function getFilteredAdminItemSelectorItems(sourceItems, searchText) {
+  const normalizedSearch = String(searchText || "").trim().toLowerCase();
+  if (!normalizedSearch) return sourceItems;
+  return sourceItems.filter((item) => {
+    const displayItem = normalizeSystemInventoryItemForDisplay(item);
+    const searchable = [
+      displayItem?.name,
+      displayItem?.shortLabel,
+      displayItem?.category,
+      item?.id,
+    ]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean)
+      .join(" ");
+    return searchable.includes(normalizedSearch);
+  });
+}
+
+function buildAdminItemSelectorOptionsMarkup(selector, sourceItems, selectedItemId) {
+  const searchText = getAdminItemSelectorSearchValue(selector);
+  const filteredItems = getFilteredAdminItemSelectorItems(sourceItems, searchText);
+  return filteredItems.length
+    ? filteredItems.map((item) => buildAdminItemSelectorOption(item, item.id === selectedItemId)).join("")
+    : '<div class="item-selector-empty">조건에 맞는 아이템이 없습니다.</div>';
+}
+
+function buildAdminItemSelectorMenuMarkup(selector, sourceItems, selectedItemId) {
+  const shouldShowSearch = sourceItems.length > 12;
+  const searchMarkup = shouldShowSearch
+    ? `
+      <label class="item-selector-search">
+        <input type="search" value="${escapeHtml(selector.dataset.searchText || "")}" placeholder="아이템 검색" data-item-selector-search />
+      </label>
+    `
+    : "";
+  return `
+    ${searchMarkup}
+    <div class="item-selector-options-scroll">
+      ${buildAdminItemSelectorOptionsMarkup(selector, sourceItems, selectedItemId)}
+    </div>
+  `;
+}
+
+function setAdminItemSelectorLayerState(selector, isOpen) {
+  if (!(selector instanceof HTMLElement)) return;
+  selector.classList.toggle("is-open-layer", Boolean(isOpen));
+  const hostCard = selector.closest(".content-card");
+  if (hostCard instanceof HTMLElement) {
+    hostCard.classList.toggle("item-selector-host-open", Boolean(isOpen));
+  }
+}
+
+function closeAllAdminItemSelectors() {
+  document.querySelectorAll("[data-admin-item-selector]").forEach((selector) => {
+    const menu = selector.querySelector("[data-item-selector-menu]");
+    const trigger = selector.querySelector("[data-item-selector-trigger]");
+    if (menu) menu.classList.add("hidden");
+    if (trigger) {
+      trigger.classList.remove("is-open");
+      trigger.setAttribute("aria-expanded", "false");
+    }
+    setAdminItemSelectorLayerState(selector, false);
+  });
+}
+
 function handleAdminItemSelection(selector, nextItemId) {
   if (!selector) return;
   syncAdminItemSelector(selector, nextItemId);
@@ -5364,6 +6486,22 @@ function bindAdminItemSelectorMenu(selector) {
     event.stopPropagation();
     handleAdminItemSelection(selector, option.dataset.itemSelectorOption || "");
   });
+
+  menu.addEventListener("input", (event) => {
+    const searchInput = event.target.closest("[data-item-selector-search]");
+    if (!searchInput) return;
+    selector.dataset.searchText = String(searchInput.value || "");
+    const optionsScroll = menu.querySelector(".item-selector-options-scroll");
+    if (optionsScroll) {
+      const selectedItemId =
+        selector.dataset.selectedItemId || selector.querySelector("[data-item-selector-input]")?.value || "";
+      optionsScroll.innerHTML = buildAdminItemSelectorOptionsMarkup(
+        selector,
+        getAdminItemSelectorSourceItems(selector),
+        String(selectedItemId || "").trim()
+      );
+    }
+  });
 }
 
 function getAdminItemSelectorSourceItems(selector) {
@@ -5376,7 +6514,7 @@ function getAdminItemSelectorSourceItems(selector) {
     .filter(Boolean);
 }
 
-function syncAdminItemSelector(selector, itemId) {
+function syncAdminItemSelector(selector, itemId, { closeMenu = true } = {}) {
   if (!selector) return;
 
   const hiddenInput = selector.querySelector("[data-item-selector-input]");
@@ -5404,13 +6542,21 @@ function syncAdminItemSelector(selector, itemId) {
     : `<span class="item-selector-label muted" data-item-selector-label>${escapeHtml(placeholder)}</span>`;
 
   menu.innerHTML = sourceItems.length
-    ? sourceItems.map((item) => buildAdminItemSelectorOption(item, item.id === normalizedItemId)).join("")
+    ? buildAdminItemSelectorMenuMarkup(selector, sourceItems, normalizedItemId)
     : '<div class="item-selector-empty">표시할 아이템이 없습니다.</div>';
 
   bindAdminItemSelectorMenu(selector);
-  menu.classList.add("hidden");
-  trigger.classList.remove("is-open");
-  trigger.setAttribute("aria-expanded", "false");
+  if (closeMenu) {
+    menu.classList.add("hidden");
+    trigger.classList.remove("is-open");
+    trigger.setAttribute("aria-expanded", "false");
+    setAdminItemSelectorLayerState(selector, false);
+  } else {
+    menu.classList.remove("hidden");
+    trigger.classList.add("is-open");
+    trigger.setAttribute("aria-expanded", "true");
+    setAdminItemSelectorLayerState(selector, true);
+  }
 }
 
 function initializeAdminItemSelectors(root = document) {
@@ -5427,15 +6573,12 @@ function initializeAdminItemSelectors(root = document) {
       event.preventDefault();
       event.stopPropagation();
       const isOpen = !menu?.classList.contains("hidden");
-      document.querySelectorAll("[data-item-selector-menu]").forEach((entry) => entry.classList.add("hidden"));
-      document.querySelectorAll("[data-item-selector-trigger]").forEach((entry) => {
-        entry.classList.remove("is-open");
-        entry.setAttribute("aria-expanded", "false");
-      });
+      closeAllAdminItemSelectors();
       if (!isOpen && menu) {
         menu.classList.remove("hidden");
         trigger.classList.add("is-open");
         trigger.setAttribute("aria-expanded", "true");
+        setAdminItemSelectorLayerState(selector, true);
       }
     });
   });
@@ -5444,11 +6587,7 @@ function initializeAdminItemSelectors(root = document) {
     document.body.dataset.itemSelectorOutsideBound = "true";
     document.addEventListener("click", (event) => {
       if (event.target.closest("[data-admin-item-selector]")) return;
-      document.querySelectorAll("[data-item-selector-menu]").forEach((entry) => entry.classList.add("hidden"));
-      document.querySelectorAll("[data-item-selector-trigger]").forEach((entry) => {
-        entry.classList.remove("is-open");
-        entry.setAttribute("aria-expanded", "false");
-      });
+      closeAllAdminItemSelectors();
     });
   }
 }
@@ -5456,11 +6595,11 @@ function initializeAdminItemSelectors(root = document) {
 function buildCategoryOverrideOptions(selectedValue = "") {
   const normalizedSelected = normalizeSpriteCategory(selectedValue || "기타 아이템");
   return itemSpriteCategories
-    .map((category) => {
-      const selected = category === normalizedSelected ? "selected" : "";
-      return `<option value="${escapeHtml(category)}" ${selected}>${escapeHtml(category)}</option>`;
-    })
-    .join("");
+    .map((category) => ({
+      value: category,
+      label: category,
+      description: category === normalizedSelected ? "현재 카테고리" : "카테고리 선택",
+    }));
 }
 
 function getRandomBoxTypeByItemName(itemName) {
@@ -5551,7 +6690,8 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
   const categoryDisplay = form.querySelector("[data-sprite-category-display]");
   const categoryEditToggle = form.querySelector("[data-category-edit-toggle]");
   const categoryEditRow = form.querySelector("[data-category-edit-row]");
-  const categoryOverrideSelect = form.elements.categoryOverride;
+  const categoryOverrideInput = form.elements.categoryOverride;
+  const categoryOverrideSelector = form.querySelector('[data-admin-option-selector][data-option-selector-input-name="categoryOverride"]');
   const foodRewardRow = form.querySelector("[data-food-reward-row]");
   const foodRewardInput = form.elements.foodCurrencyReward;
   const colorPresetInput = form.elements.colorPreset;
@@ -5596,7 +6736,7 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
 
   const syncCategory = () => {
     const autoCategory = getItemSpriteCategory(hiddenSpriteInput?.value || "");
-    const manualCategory = String(categoryOverrideSelect?.value || "").trim();
+    const manualCategory = String(categoryOverrideInput?.value || "").trim();
     const category = form.dataset.categoryMode === "manual" && manualCategory
       ? normalizeSpriteCategory(manualCategory)
       : autoCategory;
@@ -5606,8 +6746,8 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
     if (categoryDisplay) {
       categoryDisplay.textContent = category;
     }
-    if (categoryOverrideSelect && form.dataset.categoryMode !== "manual") {
-      categoryOverrideSelect.innerHTML = buildCategoryOverrideOptions(autoCategory);
+    if (categoryOverrideSelector && form.dataset.categoryMode !== "manual") {
+      setAdminOptionSelectorOptions(categoryOverrideSelector, buildCategoryOverrideOptions(autoCategory), autoCategory);
     }
   };
 
@@ -5651,6 +6791,7 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
     selectedPreviewImage.style.removeProperty("filter");
   };
 
+  initializeAdminOptionSelectors(form);
   syncCategory();
   syncShopRow();
   syncFoodRewardRow();
@@ -5668,8 +6809,12 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
       const isManual = form.dataset.categoryMode === "manual";
       form.dataset.categoryMode = isManual ? "auto" : "manual";
       categoryEditRow?.classList.toggle("hidden", isManual);
-      if (!isManual && categoryOverrideSelect) {
-        categoryOverrideSelect.innerHTML = buildCategoryOverrideOptions(categoryInput?.value || "기타");
+      if (!isManual && categoryOverrideSelector) {
+        setAdminOptionSelectorOptions(
+          categoryOverrideSelector,
+          buildCategoryOverrideOptions(categoryInput?.value || "기타"),
+          categoryInput?.value || "기타"
+        );
       }
       if (categoryEditToggle) {
         categoryEditToggle.textContent = isManual ? "카테고리 수정" : "자동 카테고리 사용";
@@ -5677,7 +6822,7 @@ function bindAdminItemMetaForm(form, forceRefresh = false) {
       syncCategory();
       syncFoodRewardRow();
     });
-    categoryOverrideSelect?.addEventListener("change", () => {
+    categoryOverrideInput?.addEventListener("change", () => {
       syncCategory();
       syncFoodRewardRow();
     });
@@ -5771,7 +6916,7 @@ function initializeItemSpritePickers(root = document) {
       selection.innerHTML = `
         <div class="sprite-picker-selected-card">
           <span class="sprite-picker-selected-thumb">
-            <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(sprite.label)}" class="sprite-picker-selected-image" loading="lazy" />
+            <img src="${escapeHtml(getItemSpriteUrl(sprite))}" alt="${escapeHtml(sprite.label)}" class="sprite-picker-selected-image" loading="lazy"${buildItemSpriteFallbackAttributes(sprite)} />
           </span>
           <span class="sprite-picker-selected-copy">
             <strong>${escapeHtml(sprite.label)}</strong>
@@ -5891,7 +7036,7 @@ function syncItemSpritePicker(picker, spriteKey) {
       ? `
         <div class="sprite-picker-selected-card">
           <span class="sprite-picker-selected-thumb">
-            <img src="${escapeHtml(getItemSpriteUrl(selectedSprite))}" alt="${escapeHtml(selectedSprite.label)}" class="sprite-picker-selected-image" loading="lazy" />
+            <img src="${escapeHtml(getItemSpriteUrl(selectedSprite))}" alt="${escapeHtml(selectedSprite.label)}" class="sprite-picker-selected-image" loading="lazy"${buildItemSpriteFallbackAttributes(selectedSprite)} />
           </span>
           <span class="sprite-picker-selected-copy">
             <strong>${escapeHtml(selectedSprite.label)}</strong>
@@ -5907,22 +7052,395 @@ function syncItemSpritePicker(picker, spriteKey) {
 }
 
 function buildDisplayRankings(rankings) {
-  const sorted = [...(Array.isArray(rankings) ? rankings : [])].sort((left, right) => {
-    const pointDiff = Number(right.rankingPoints || 0) - Number(left.rankingPoints || 0);
-    if (pointDiff !== 0) {
-      return pointDiff;
-    }
-    return String(left.characterName || "").localeCompare(String(right.characterName || ""), "ko");
-  });
+  const sorted = [...(Array.isArray(rankings) ? rankings : [])];
+  const hasServerRanks = sorted.every((item) => Number.isFinite(Number(item?.displayRank)));
+  if (!hasServerRanks) {
+    sorted.sort((left, right) => {
+      const pointDiff = Number(right.rankingPoints || 0) - Number(left.rankingPoints || 0);
+      if (pointDiff !== 0) {
+        return pointDiff;
+      }
+      return String(left.characterName || "").localeCompare(String(right.characterName || ""), "ko");
+    });
+  }
 
   let lastDisplayRank = 0;
   return sorted.map((item, index) => {
+    if (hasServerRanks) {
+      return {
+        ...item,
+        displayRank: Number(item.displayRank || index + 1),
+      };
+    }
     const previousPoints = index > 0 ? Number(sorted[index - 1].rankingPoints || 0) : null;
     const currentPoints = Number(item.rankingPoints || 0);
     const displayRank = index > 0 && previousPoints === currentPoints ? lastDisplayRank : index + 1;
     lastDisplayRank = displayRank;
     return { ...item, displayRank };
   });
+}
+
+function formatRankingScoreValue(value, scoreUnit = "points") {
+  const numericValue = Number(value || 0);
+  if (scoreUnit === "percent") {
+    if (Math.abs(numericValue) < 0.005) {
+      return "0%";
+    }
+    const rounded = Math.round(numericValue * 100) / 100;
+    const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, "");
+    return `${text}%`;
+  }
+  return String(Math.round(numericValue));
+}
+
+function roundRankingTerritoryValue(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function renderRankingModeTable(body, rankings, scoreUnit = "points") {
+  if (!(body instanceof HTMLElement)) return;
+  if (!rankings.length) {
+    body.innerHTML = '<tr><td colspan="6" class="table-empty">표시할 랭킹이 없습니다.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = rankings
+    .map(
+      (item) => `
+        <tr>
+          <td>${item.displayRank}</td>
+          <td><button type="button" class="text-button ranking-profile-button" data-ranking-character="${escapeHtml(item.characterName || "")}"${buildCharacterNameStyleAttribute(item)}>${buildDisplayedCharacterNameMarkup(item)}</button></td>
+          <td>${escapeHtml(item.nickname || "-")}</td>
+          <td>${Number(item.currency || 0)} 환</td>
+          <td>${escapeHtml(formatRankingScoreValue(item.rankingPoints, scoreUnit))}</td>
+          <td>${escapeHtml(getDisplayedRankingFactionName(item) || "-")}</td>
+        </tr>
+      `
+    )
+    .join("");
+}
+
+function formatRankingDateLabel(dateKey) {
+  const matched = String(dateKey || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!matched) {
+    return "날짜 정보 없음";
+  }
+  return `${matched[1]}-${matched[2]}-${matched[3]}`;
+}
+
+function buildFactionScoreBarMarkup(factionScores) {
+  const rawTotals = factionScores?.barTotals || factionScores?.rawTotals || {};
+  const scoreUnit = String(factionScores?.barUnit || factionScores?.displayUnit || "points").trim();
+  const factions = [
+    { name: "매화", className: "faction-maehwa" },
+    { name: "난초", className: "faction-nancho" },
+    { name: "국화", className: "faction-gukhwa" },
+    { name: "대나무", className: "faction-daenamu" },
+  ];
+  const numericValues = factions.map((faction) => Number(rawTotals[faction.name] || 0));
+  const hasNegativeValue = numericValues.some((value) => value < 0);
+  const minimumValue = hasNegativeValue ? Math.min(...numericValues) : 0;
+  const layoutTotals = factions.reduce((result, faction) => {
+    const value = Number(rawTotals[faction.name] || 0);
+    result[faction.name] = hasNegativeValue ? Math.max(0, value - minimumValue) : Math.max(0, value);
+    return result;
+  }, {});
+  const positiveTotal = factions.reduce((sum, faction) => sum + Number(layoutTotals[faction.name] || 0), 0);
+  const useEqualLayout = positiveTotal <= 0;
+  const useMinimumVisibility = !useEqualLayout && scoreUnit !== "percent";
+  const minimumSegmentRatio = useMinimumVisibility ? 1.2 : 0;
+  const distributableRatio = Math.max(0, 100 - (minimumSegmentRatio * factions.length));
+
+  const segments = factions
+    .map((faction) => {
+      const value = Number(rawTotals[faction.name] || 0);
+      const layoutValue = Number(layoutTotals[faction.name] || 0);
+      const positiveRatio = positiveTotal > 0 ? (layoutValue / positiveTotal) * distributableRatio : 0;
+      const ratio = useEqualLayout ? 25 : minimumSegmentRatio + positiveRatio;
+      const displayValue = formatRankingScoreValue(value, scoreUnit);
+      return `
+        <div class="faction-score-segment ${faction.className}" style="width:${ratio.toFixed(2)}%" data-tooltip="${escapeHtml(`${faction.name} ${displayValue}`)}" aria-label="${escapeHtml(`${faction.name} ${displayValue}`)}">
+          <span class="faction-score-value">${escapeHtml(displayValue)}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="faction-score-bar${useEqualLayout ? " is-empty" : ""}">
+      ${segments}
+    </div>
+  `;
+}
+
+function buildFactionSummaryMarkup(factionScores, territory) {
+  const rawTotals = factionScores?.rawTotals || {};
+  const displayUnit = String(factionScores?.displayUnit || "points").trim();
+  const remainingTotals = factionScores?.remainingTotals || territory?.remainingTotals || {};
+  const captureCounts = factionScores?.captureCounts || territory?.captureCounts || {};
+  const captureThreshold = Math.max(1, Number(territory?.regularCaptureThreshold || 100));
+  const hold = territory?.regularClaimHold;
+  const heldFactions = new Set(Array.isArray(hold?.factions) ? hold.factions : []);
+  const factions = [
+    { name: "매화", className: "faction-maehwa" },
+    { name: "난초", className: "faction-nancho" },
+    { name: "국화", className: "faction-gukhwa" },
+    { name: "대나무", className: "faction-daenamu" },
+  ];
+
+  return `
+    <div class="ranking-faction-stack">
+      ${buildFactionScoreBarMarkup(factionScores)}
+      <div class="ranking-faction-cards">
+        ${factions
+          .map((faction) => {
+            const rawTotal = Number(rawTotals[faction.name] || 0);
+            const remaining = Number(remainingTotals[faction.name] || 0);
+            const captures = Number(captureCounts[faction.name] || 0);
+            const gauge = rawTotal > 0
+              ? Math.max(0, Math.min(100, (Math.max(0, remaining) / captureThreshold) * 100))
+              : 0;
+            const pointsToNextCapture = Math.max(0, roundRankingTerritoryValue(captureThreshold - remaining));
+            const isClaimHeld = territory?.phase === "regular"
+              && hold?.availableCells === 1
+              && heldFactions.has(faction.name)
+              && remaining >= captureThreshold;
+            return `
+              <article class="ranking-faction-card ${faction.className}">
+                <div>
+                  <strong>${escapeHtml(faction.name)}</strong>
+                  <span>합산 ${escapeHtml(formatRankingScoreValue(rawTotal, displayUnit))}</span>
+                </div>
+                <div class="ranking-faction-progress">
+                  <div class="ranking-faction-progress-bar">
+                    <span style="width:${gauge}%"></span>
+                  </div>
+                  <small>${escapeHtml(
+                    isClaimHeld
+                      ? `점령 ${captures}칸 / 마지막 1칸 동점 보류`
+                      : `점령 ${captures}칸 / 다음 점령까지 ${formatRankingScoreValue(pointsToNextCapture, "points")}`
+                  )}</small>
+                </div>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function ensureDashboardFactionBar(statsStrip) {
+  if (!(statsStrip instanceof HTMLElement)) return;
+  let card = statsStrip.querySelector("[data-dashboard-faction-bar]");
+  if (!card) {
+    card = document.createElement("div");
+    card.className = "stats-faction-bar-card";
+    card.setAttribute("data-dashboard-faction-bar", "true");
+    card.innerHTML = '<div class="faction-score-bar is-empty"><div class="faction-score-segment faction-maehwa" style="width:25%" data-tooltip="매화 0" aria-label="매화 0"><span class="faction-score-value">0</span></div><div class="faction-score-segment faction-nancho" style="width:25%" data-tooltip="난초 0" aria-label="난초 0"><span class="faction-score-value">0</span></div><div class="faction-score-segment faction-gukhwa" style="width:25%" data-tooltip="국화 0" aria-label="국화 0"><span class="faction-score-value">0</span></div><div class="faction-score-segment faction-daenamu" style="width:25%" data-tooltip="대나무 0" aria-label="대나무 0"><span class="faction-score-value">0</span></div></div>';
+    statsStrip.insertAdjacentElement("afterbegin", card);
+  }
+}
+
+async function hydrateDashboardFactionBar() {
+  const card = document.querySelector("[data-dashboard-faction-bar]");
+  if (!(card instanceof HTMLElement)) return;
+  try {
+    const board = await getCurrentRankingBoardSnapshot(false);
+    card.innerHTML = buildFactionScoreBarMarkup(board?.currentFactionScores || board?.factionScores);
+  } catch {
+    card.innerHTML = buildFactionScoreBarMarkup(null);
+  }
+}
+
+function buildTerritoryMapMarkup(territory) {
+  const cells = Array.isArray(territory?.cells) && territory.cells.length ? territory.cells : buildFallbackTerritoryCells();
+  const hold = territory?.regularClaimHold;
+  const captureCounts = PROFILE_FACTION_OPTIONS.reduce((result, factionName) => {
+    result[factionName] = 0;
+    return result;
+  }, {});
+  let contestedCount = 0;
+  cells.forEach((cell) => {
+    const ownerFaction = String(cell?.ownerFaction || "").trim();
+    if (ownerFaction && Object.prototype.hasOwnProperty.call(captureCounts, ownerFaction)) {
+      captureCounts[ownerFaction] += 1;
+      return;
+    }
+    if (ownerFaction === "__contested__") contestedCount += 1;
+  });
+  const sideGroups = [
+    [
+      { name: "매화", className: "faction-maehwa" },
+      { name: "난초", className: "faction-nancho" },
+    ],
+    [
+      { name: "국화", className: "faction-gukhwa" },
+      { name: "대나무", className: "faction-daenamu" },
+    ],
+  ];
+
+  const size = 22;
+  const layoutCells = cells.map((cell) => {
+    const q = Number(cell.q || 0);
+    const r = Number(cell.r || 0);
+    return {
+      ...cell,
+      x: size * Math.sqrt(3) * (q + r / 2),
+      y: size * 1.5 * r,
+    };
+  });
+
+  const minX = Math.min(...layoutCells.map((cell) => cell.x));
+  const maxX = Math.max(...layoutCells.map((cell) => cell.x));
+  const minY = Math.min(...layoutCells.map((cell) => cell.y));
+  const maxY = Math.max(...layoutCells.map((cell) => cell.y));
+  const padding = 40;
+  const width = Math.max(320, maxX - minX + padding * 2);
+  const height = Math.max(320, maxY - minY + padding * 2);
+  const hexPoints = buildHexPoints(size);
+
+  return `
+    ${territory?.phase === "regular" && hold?.availableCells === 1 && Array.isArray(hold.factions) && hold.factions.length > 1
+      ? `<p class="muted">마지막 1칸 지급 보류: ${escapeHtml(hold.factions.join(", "))} 동점 ${escapeHtml(formatRankingScoreValue(hold.points || 0, "points"))}</p>`
+      : ""}
+    ${territory?.phase === "war" && contestedCount > 0
+      ? `<div class="territory-contested-summary"><span class="territory-contested-badge">투쟁중 지역: ${contestedCount}</span></div>`
+      : ""}
+    <div class="territory-map-shell">
+      <aside class="territory-side territory-side-left">
+        ${sideGroups[0]
+          .map(
+            (faction) => `
+              <article class="territory-side-card ${faction.className}">
+                <strong>${escapeHtml(faction.name)}</strong>
+                <span>${Number(captureCounts[faction.name] || 0)}칸</span>
+              </article>
+            `
+          )
+          .join("")}
+      </aside>
+      <div class="territory-map-center">
+        <svg viewBox="0 0 ${width} ${height}" class="territory-svg" role="img" aria-label="파벌 영토 지도">
+          <defs>
+            <linearGradient id="territory-gradient-neutral" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="rgba(188, 194, 202, 0.36)" />
+              <stop offset="58%" stop-color="rgba(216, 222, 230, 0.42)" />
+              <stop offset="100%" stop-color="rgba(255, 255, 255, 0.74)" />
+            </linearGradient>
+            <linearGradient id="territory-gradient-maehwa" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="rgba(112, 22, 38, 0.95)" />
+              <stop offset="54%" stop-color="rgba(148, 34, 53, 0.9)" />
+              <stop offset="100%" stop-color="rgba(255, 212, 220, 0.88)" />
+            </linearGradient>
+            <linearGradient id="territory-gradient-nancho" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="rgba(8, 10, 14, 0.98)" />
+              <stop offset="54%" stop-color="rgba(20, 24, 30, 0.98)" />
+              <stop offset="100%" stop-color="rgba(232, 238, 246, 0.8)" />
+            </linearGradient>
+            <linearGradient id="territory-gradient-gukhwa" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="rgba(156, 160, 170, 0.94)" />
+              <stop offset="54%" stop-color="rgba(218, 220, 226, 0.94)" />
+              <stop offset="100%" stop-color="rgba(255, 255, 255, 0.96)" />
+            </linearGradient>
+            <linearGradient id="territory-gradient-daenamu" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="rgba(26, 92, 47, 0.95)" />
+              <stop offset="54%" stop-color="rgba(42, 126, 68, 0.9)" />
+              <stop offset="100%" stop-color="rgba(214, 255, 224, 0.82)" />
+            </linearGradient>
+            <linearGradient id="territory-gradient-contested" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="rgba(132, 44, 8, 0.94)" />
+              <stop offset="54%" stop-color="rgba(208, 82, 24, 0.9)" />
+              <stop offset="100%" stop-color="rgba(255, 234, 196, 0.84)" />
+            </linearGradient>
+          </defs>
+          ${layoutCells
+            .map((cell) => {
+              const ownerClass = getTerritoryFactionClass(cell.ownerFaction);
+              const cx = cell.x - minX + padding;
+              const cy = cell.y - minY + padding;
+              const cellNumber = String(cell.id || "").replace(/^cell-/, "");
+              const ownerLabel = String(cell.ownerFaction || "").trim() === "__contested__"
+                ? "투쟁중"
+                : String(cell.ownerFaction || "").trim() || "빈 땅";
+              return `
+                <g class="territory-cell ${ownerClass}" transform="translate(${cx.toFixed(2)} ${cy.toFixed(2)})" data-tooltip="${escapeHtml(`${cellNumber}번 땅 · ${ownerLabel}`)}" aria-label="${escapeHtml(`${cellNumber}번 땅 · ${ownerLabel}`)}">
+                  <ellipse class="territory-cell-shadow" cx="4.2" cy="5.2" rx="8.4" ry="4.6" />
+                  <polygon class="territory-cell-glow" points="${hexPoints}" />
+                  <polygon class="territory-cell-body" points="${hexPoints}" />
+                  <ellipse class="territory-cell-sheen" cx="-4.8" cy="-6.2" rx="7.4" ry="4.2" />
+                  <ellipse class="territory-cell-bottom-gloss" cx="0" cy="6.4" rx="8.3" ry="4.6" />
+                  <ellipse class="territory-cell-spark" cx="-1.8" cy="-2.6" rx="3.2" ry="1.8" />
+                  ${String(cell.ownerFaction || "").trim() === "__contested__"
+                    ? '<text class="territory-cell-contested-icon" text-anchor="middle" dominant-baseline="central">⚔️</text>'
+                    : ""}
+                </g>
+              `;
+            })
+            .join("")}
+        </svg>
+      </div>
+      <aside class="territory-side territory-side-right">
+        ${sideGroups[1]
+          .map(
+            (faction) => `
+              <article class="territory-side-card ${faction.className}">
+                <strong>${escapeHtml(faction.name)}</strong>
+                <span>${Number(captureCounts[faction.name] || 0)}칸</span>
+              </article>
+            `
+          )
+          .join("")}
+      </aside>
+    </div>
+  `;
+}
+
+function buildFallbackTerritoryCells() {
+  const cells = [];
+  const frontier = [{ q: 0, r: 0 }];
+  const visited = new Set(["0,0"]);
+  let cursor = 0;
+  while (cursor < frontier.length && cells.length < 100) {
+    const current = frontier[cursor];
+    cursor += 1;
+    cells.push({ id: `fallback-${cells.length + 1}`, q: current.q, r: current.r, ownerFaction: "" });
+    [
+      { q: current.q + 1, r: current.r },
+      { q: current.q - 1, r: current.r },
+      { q: current.q, r: current.r + 1 },
+      { q: current.q, r: current.r - 1 },
+      { q: current.q + 1, r: current.r - 1 },
+      { q: current.q - 1, r: current.r + 1 },
+    ].forEach((neighbor, index) => {
+      if (cells.length + frontier.length >= 100 && index > 1) return;
+      const key = `${neighbor.q},${neighbor.r}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      if ((neighbor.q * 31 + neighbor.r * 17 + index) % 5 !== 0 || frontier.length < 16) {
+        frontier.push(neighbor);
+      }
+    });
+  }
+  return cells;
+}
+
+function buildHexPoints(size) {
+  const points = [];
+  for (let index = 0; index < 6; index += 1) {
+    const angle = Math.PI / 180 * (60 * index - 30);
+    points.push(`${(size * Math.cos(angle)).toFixed(2)},${(size * Math.sin(angle)).toFixed(2)}`);
+  }
+  return points.join(" ");
+}
+
+function getTerritoryFactionClass(factionName) {
+  if (factionName === "매화") return "faction-maehwa";
+  if (factionName === "난초") return "faction-nancho";
+  if (factionName === "국화") return "faction-gukhwa";
+  if (factionName === "대나무") return "faction-daenamu";
+  if (factionName === "__contested__") return "is-contested";
+  return "is-neutral";
 }
 
 function getFactionThemeClass(factionName) {
